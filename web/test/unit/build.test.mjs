@@ -7,12 +7,17 @@ import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
-import { build, DIST, PAYLOAD_PATH } from '../../build.mjs';
+import { build, PAYLOAD_PATH } from '../../build.mjs';
 import { INSTANCE_PLACEHOLDER, sealedFrameCsp, shellCsp, siteHeaders } from '../../src/policy.mjs';
 
+// Builds into a private directory. web/dist is left alone, because the browser
+// tests serve it and may be running at the same time (build() starts by
+// removing its output directory).
 let info;
+let DIST;
 before(async () => {
-  info = await build({ quiet: true });
+  DIST = await mkdtemp(join(tmpdir(), 'offlineseal-build-test-'));
+  info = await build({ outDir: DIST, quiet: true });
 });
 
 const read = (p) => readFile(join(DIST, p), 'utf8');

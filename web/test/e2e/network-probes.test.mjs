@@ -93,6 +93,9 @@ test('sealed frame: every benign network probe is blocked', async (t) => {
     objectData: `(() => { try { const o = document.createElement('object'); o.data = '${P}/frame-object'; document.body.append(o); return 'inserted'; } catch (e) { return 'threw ' + e.name; } })()`,
     embedSrc: `(() => { try { const e = document.createElement('embed'); e.src = '${P}/frame-embed'; document.body.append(e); return 'inserted'; } catch (e) { return 'threw ' + e.name; } })()`,
     worker: `(() => { try { new Worker('${P}/frame-worker'); return 'constructed'; } catch (e) { return 'threw ' + e.name; } })()`,
+    // Worker from a blob: URL the frame did not mint from the pinned Worker
+    // code: worker-src allows blob:, but Trusted Types refuses this URL.
+    workerForeignBlob: `(() => { try { new Worker(URL.createObjectURL(new Blob(['fetch("${P}/frame-foreign-blob-worker")']))); return 'constructed'; } catch (e) { return 'threw ' + e.name; } })()`,
     sharedWorker: `(() => { try { new SharedWorker('${P}/frame-shared-worker'); return 'constructed'; } catch (e) { return 'threw ' + e.name; } })()`,
     serviceWorker: `(() => { try { return navigator.serviceWorker ? 'available' : 'unavailable'; } catch (e) { return 'threw ' + e.name; } })()`,
     audio: `new Promise((r) => { const a = new Audio(); a.onerror = () => r('error'); a.src = '${P}/frame-audio'; a.load(); setTimeout(() => r('no event'), 1000); })`,
@@ -142,6 +145,7 @@ test('sealed frame: every benign network probe is blocked', async (t) => {
   assert.match(results.nestedSrcdoc, /threw TypeError/, 'Trusted Types blocks nested srcdoc');
   assert.match(results.scriptSrc, /threw TypeError/, 'Trusted Types blocks script URLs');
   assert.match(results.worker, /threw/);
+  assert.match(results.workerForeignBlob, /threw TypeError/, 'only the pinned Worker code can start');
   assert.ok(violations.some((v) => v.startsWith('connect-src')));
   assert.ok(violations.some((v) => v.startsWith('img-src')));
 });

@@ -112,7 +112,11 @@ test('the file and its bytes stay in the sealed frame; the shell and server neve
   const shellLoads = loadRequests.filter((r) => r.frame === 'shell');
   const frameLoads = loadRequests.filter((r) => r.frame === 'sealed');
   assert.ok(shellLoads.every((r) => r.method === 'GET' && r.url.startsWith(app.origin)));
-  assert.deepEqual(frameLoads.map((r) => r.url), [processingRequests[0].url], 'the frame loads nothing but the self-check Worker');
+  // Playwright usually reports that self-check Worker start, but in Edge 154
+  // the Worker is sometimes created before Playwright is watching the frame's
+  // traffic (2 of 6 soak runs). So: at most one load, and only the pinned code.
+  assert.ok(frameLoads.length <= 1, `frame loads before READY: ${frameLoads.map((r) => r.url)}`);
+  assert.ok(frameLoads.every((r) => r.url === processingRequests[0].url), 'the frame loads nothing but the self-check Worker');
   t.diagnostic(`requests before READY: ${loadRequests.map((r) => new URL(r.url).pathname).join(', ')}`);
 
   // 6. The results exist only as local downloads.

@@ -1,14 +1,19 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { build } from '../../build.mjs';
 import { startServer } from '../../server/serve.mjs';
 
 let server;
+// A private build, so this never rebuilds the web/dist the browser tests serve.
 before(async () => {
-  await build({ quiet: true });
-  server = await startServer();
+  const root = await mkdtemp(join(tmpdir(), 'offlineseal-server-test-'));
+  await build({ outDir: root, quiet: true });
+  server = await startServer({ root });
 });
 after(() => server.close());
 

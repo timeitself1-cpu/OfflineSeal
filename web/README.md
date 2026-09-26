@@ -305,47 +305,64 @@ already blocks every cross-origin load, so COEP would add no protection here.
 cd web
 npm ci
 npx playwright install chromium   # not needed where Chromium is preinstalled
-npm test                          # build + 42 unit tests + 28 browser tests
+npm test                          # build + 56 unit tests + 36 browser tests (Chromium)
+npm run test:edge                 # the 36 browser tests in an installed Microsoft Edge
 npm run serve                     # http://127.0.0.1:8080/image
 npm run evidence                  # screenshots + network log into docs/
 ```
 
+`OFFLINESEAL_BROWSER` picks the browser for the browser tests and for
+`npm run evidence`: `chromium` (the default, Playwright's Chromium) or any
+Playwright channel, such as `msedge` or `chrome`.
+
 | Suite | What it checks |
 |---|---|
-| `test/unit/protocol` | Message allowlist and lifecycle state machine. |
-| `test/unit/policy` | Sandbox tokens; every CSP directive; no wildcard, scheme, `unsafe-*` or host sources; required headers. |
+| `test/unit/protocol` | Shell ↔ frame message allowlist and lifecycle state machine. |
+| `test/unit/worker-protocol` | Frame ↔ Worker requests and responses: exact shapes, job ids, types via `instanceof`; generic commands rejected. |
+| `test/unit/worker-runtime` | The real built Worker script in a fake Worker global: unknown requests get no reply, one job per Worker, `destroy`/`cancel`, and a Worker that cannot verify its seal refuses the file without reading a byte. |
+| `test/unit/policy` | Sandbox tokens; every CSP directive; no wildcard, scheme, `unsafe-*` or host sources, except exactly `worker-src blob:`; required headers. |
 | `test/unit/build` | Payload integrity, script/style hashes, CSP placement, no external URLs, trackers or fonts, deterministic output. |
-| `test/unit/sealed-audit` | The tool code uses no network API, no eval/HTML sinks, and posts only protocol messages. The shell never reads files. |
+| `test/unit/sealed-audit` | Each part stays in its lane: the frame UI never decodes, encodes or reads bytes; all processing is in the Worker; Workers are created in one place, only via the Trusted Types policy; no network APIs, eval or HTML sinks; messages only on the protocols. |
 | `test/unit/server`, `converter-core` | Clean URLs and headers; converter maths, format sniffing, file names. |
 | `test/e2e/policy` | Live iframe sandbox, opaque origin, enforced frame CSP, response headers, Permissions-Policy, frame-ancestors. |
-| `test/e2e/network-probes` | 36 benign probe channels from the live frame (details below). Positive controls; self-navigation; shell online but no relay. |
+| `test/e2e/network-probes` | 37 benign probe channels from the live frame and 19 from inside a live processing Worker while it holds the file. Positive controls; self-navigation; shell online but no relay. |
+| `test/e2e/worker-lifecycle` | One fresh Worker per job, all terminated, never two alive. File A's Worker is gone before File B begins, and B cannot see state planted in A. The frame realm makes zero processing or byte-reading calls. A new image mid-conversion kills the running Worker. Hostile Worker messages are ignored. Decode errors and Worker crashes fail cleanly with nothing leaked. |
 | `test/e2e/data-isolation` | A synthetic marker image end to end with the shell realm and server instrumented, plus a positive control for the detector. |
-| `test/e2e/messages` | 16 hostile messages have no effect; messages from other windows are ignored; COOP severs openers. |
+| `test/e2e/messages` | 16 hostile shell-bound messages have no effect; messages from other windows are ignored; COOP severs openers. |
 | `test/e2e/lifecycle` | No file admission before READY; tamper, seal-failure and timeout paths fail closed; a fresh frame per image; drops on the page are ignored. |
 | `test/e2e/conversion` | PNG→JPEG/WebP/PNG, resize, alpha flattening, JPEG/GIF input, drag and drop, bad input. Outputs are decoded in a separate clean page. |
 
-The probe channels cover fetch (same-origin, cross-origin, POST, keepalive), XHR,
-sendBeacon, WebSocket, EventSource, WebTransport, image, SVG image, CSS
-background, CSSOM `@import`, FontFace, stylesheet, prefetch, preload,
-modulepreload, preconnect, dns-prefetch, script, iframe, object, embed, Worker,
-SharedWorker, audio, video poster, GET and POST forms, `window.open`, top
-navigation, `target=_top` and `_blank` links, meta refresh, WebRTC (direct and via
-a nested frame), and nested `srcdoc`. The pass condition is that the probe servers
-observe **zero** HTTP requests, TCP connections, WebSocket upgrades and UDP
-packets.
+The frame probe channels cover fetch (same-origin, cross-origin, POST,
+keepalive), XHR, sendBeacon, WebSocket, EventSource, WebTransport, image, SVG
+image, CSS background, CSSOM `@import`, FontFace, stylesheet, prefetch, preload,
+modulepreload, preconnect, dns-prefetch, script, iframe, object, embed, Worker
+(by URL and by a foreign `blob:`), SharedWorker, audio, video poster, GET and
+POST forms, `window.open`, top navigation, `target=_top` and `_blank` links,
+meta refresh, WebRTC (direct and via a nested frame), and nested `srcdoc`.
+
+The Worker probes cover fetch (four variants), XHR, WebSocket, EventSource,
+WebTransport, `importScripts`, nested Workers (URL and `blob:`), `eval`,
+`new Function`, dynamic `import()`, FontFace, WebRTC, `sendBeacon`, IndexedDB
+and Cache Storage.
+
+The pass condition is that the probe servers observe **zero** HTTP requests,
+TCP connections, WebSocket upgrades and UDP packets. There is one pinned
+exception: in Edge, the three frame-navigation probes may open a single
+connection-only TCP socket each (see the threat model).
 
 The probes carry only a fixed harmless string, never file content. They show what
-the browser enforced in this run; they are not proof against every conceivable
+the browser enforced in these runs; they are not proof against every conceivable
 browser behaviour.
 
 ### Browser support
 
 | Browser | Status |
 |---|---|
-| Chrome / Chromium 141 | **Automated.** All tests run here. |
-| Edge | Chromium-based, so expected to behave the same. **Not run.** |
-| Firefox | **Not run.** Firefox could not be installed in the environment used for this release. Expected differences: Trusted Types support depends on version (without it, the shell falls back to a plain string for `srcdoc`, and the frame loses its Trusted Types defences); `document.featurePolicy` doesn't exist, so the Permissions-Policy test is Chromium-specific. The frame's seal self-check still runs, so a Firefox that failed to enforce `connect-src` would fail closed. |
-| Safari | Not a target. It has no WebP encoder, so the frame hides the WebP option. |
+| Chromium 141 (Playwright) | **Automated.** All 92 tests. |
+| Microsoft Edge 154 (stable, Linux) | **Automated.** All 36 browser tests run; 34 pass and 2 are skipped with a stated reason. Differences, each pinned exactly in the tests: (1) Edge opens a connection-only TCP socket to the target of a blocked frame navigation (Chromium does not); (2) Edge does not recognise the `attribution-reporting` Permissions-Policy feature; (3) Playwright's init scripts run *after* the frame's inline script in Edge, so the two tests that simulate a broken seal or a crashing start-up by patching the frame first cannot run there (the logic is covered in Chromium and by the Worker unit tests). |
+| Chrome | Not run separately. Its engine matches the Chromium and Edge results above, but versions differ: the Edge TCP behaviour may also exist in newer Chrome. `OFFLINESEAL_BROWSER=chrome` runs the suite where Chrome is installed. |
+| Firefox | **Not run.** Every Mozilla download host, and Playwright's browser CDN, is blocked in the environment used for this release. Expected differences, unverified: blob: Workers from an opaque-origin sandboxed frame, `OffscreenCanvas.convertToBlob`, `bitmaprenderer` and Trusted Types support all depend on the version. Without Trusted Types, the shell and frame fall back to plain strings, and the frame loses the Trusted Types restriction on which Worker URL can start. `document.featurePolicy` doesn't exist. The frame and Worker seal checks still run, so a Firefox that failed to enforce `connect-src` would fail closed. |
+| Safari | Not a target. No WebP encoder; the Worker reports that, so the frame hides the WebP option. |
 
 ## Deploy
 
