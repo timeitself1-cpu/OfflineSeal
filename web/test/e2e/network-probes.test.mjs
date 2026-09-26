@@ -13,7 +13,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BROWSER, launchBrowser, startApp, startProbe, openTool, readyTool, sealedFrame, waitForShellState, sleep, PROBE_PREFIX, FRAME_INSTRUMENTATION, trackWorkers, setHold, release, nextWorker, allClosed } from '../helpers/harness.mjs';
+import { BROWSER, launchBrowser, startApp, startProbe, openTool, readyTool, sealedFrame, waitForShellState, sleep, PROBE_PREFIX, FRAME_INSTRUMENTATION, trackWorkers, setHold, release, workerNamed, allClosed } from '../helpers/harness.mjs';
 import { syntheticPng } from '../helpers/synthetic-image.mjs';
 
 const BENIGN = 'offlineseal-benign-probe';
@@ -260,7 +260,7 @@ test('processing Worker: every benign network probe is blocked, while it holds t
   const frame = sealedFrame(envW.page);
   await setHold(frame, true);
   await frame.setInputFiles('#file', { name: 'probe.png', mimeType: 'image/png', buffer: syntheticPng({ width: 64, height: 48 }) });
-  const live = await nextWorker(track, 2);
+  const live = await workerNamed(track, 'offlineseal-inspect');
   const appLogStart = app.log.length;
 
   const P = probe.origin;

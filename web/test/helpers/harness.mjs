@@ -309,3 +309,26 @@ export async function allClosed(track, timeout = 10_000) {
     await sleep(20);
   }
 }
+
+// Find a live Worker by the name the frame gave it ('offlineseal-inspect',
+// 'offlineseal-convert', ...), by asking the Worker itself. More robust than
+// counting creation events: in Edge the self-check Worker can start before
+// Playwright or the frame instrumentation is watching.
+export async function workerNamed(track, name, { exclude = [], timeout = 10_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    for (const rec of track.workers) {
+      if (exclude.includes(rec)) continue;
+      if (rec.name === undefined) {
+        try {
+          rec.name = await rec.worker.evaluate(() => self.name);
+        } catch {
+          rec.name = null; // already closed
+        }
+      }
+      if (rec.name === name) return rec;
+    }
+    if (Date.now() > deadline) throw new Error(`no live Worker named ${name}`);
+    await sleep(20);
+  }
+}

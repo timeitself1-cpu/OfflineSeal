@@ -12,7 +12,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MARKER, containsMarker, syntheticPng } from '../helpers/synthetic-image.mjs';
-import { launchBrowser, startApp, startProbe, openTool, waitForShellState, sealedFrame, chooseImage, convertTo, downloadResult, sleep, pollFrame, FRAME_INSTRUMENTATION, trackWorkers, frameAudit, setHold, release, nextWorker, allClosed } from '../helpers/harness.mjs';
+import { BROWSER, launchBrowser, startApp, startProbe, openTool, waitForShellState, sealedFrame, chooseImage, convertTo, downloadResult, sleep, pollFrame, FRAME_INSTRUMENTATION, trackWorkers, frameAudit, setHold, release, allClosed, workerNamed } from '../helpers/harness.mjs';
 
 
 
@@ -63,7 +63,12 @@ test('one fresh Worker per job, each terminated when its job ends, never two ali
   await allClosed(env.track);
 
   const audit = await frameAudit(env.frame);
-  assert.deepEqual(audit.workers.map((w) => w.name), ['offlineseal-self-check', 'offlineseal-inspect', 'offlineseal-convert', 'offlineseal-convert']);
+  const names = audit.workers.map((w) => w.name);
+  assert.deepEqual(names.filter((n) => n !== 'offlineseal-self-check'), ['offlineseal-inspect', 'offlineseal-convert', 'offlineseal-convert']);
+  // In Chromium the instrumentation is in place before the frame's script, so
+  // it must also see the READY self-check. In Edge the instrumentation starts
+  // later and can miss it (measured; see lifecycle.test.mjs).
+  if (BROWSER === 'chromium') assert.equal(names[0], 'offlineseal-self-check');
   for (const w of audit.workers) {
     assert.notEqual(w.terminated, null, `${w.name} was not terminated`);
     assert.equal(w.requests.filter((t) => t === 'process-image' || t === 'self-check').length, 1, 'exactly one job per Worker');
@@ -71,9 +76,11 @@ test('one fresh Worker per job, each terminated when its job ends, never two ali
   }
   // Each Worker was terminated before the next one was created.
   for (let i = 1; i < audit.workers.length; i++) assert.ok(audit.workers[i - 1].terminated <= audit.workers[i].created);
-  // The browser agrees: four distinct Workers, all closed, never two alive at once.
-  assert.equal(env.track.workers.length, 4);
-  assert.equal(new Set(env.track.workers.map((w) => w.worker)).size, 4);
+  // The browser agrees: distinct Workers (four, or three if Edge's self-check
+  // start went unreported), all closed, never two alive at once.
+  const seen = env.track.workers.length;
+  assert.ok(BROWSER === 'chromium' ? seen === 4 : seen === 3 || seen === 4, `browser reported ${seen} Workers`);
+  assert.equal(new Set(env.track.workers.map((w) => w.worker)).size, seen);
   assert.equal(maxAlive(env.track.events), 1);
   assert.deepEqual(env.page.workers(), [], 'no Worker alive after the jobs');
   await env.context.close();
@@ -84,7 +91,7 @@ test('File A and File B: different Workers; A is gone before B starts; B cannot 
   // File A: hold its inspect job so the live Worker can be inspected, and plant state in it.
   await setHold(env.frame, true);
   await chooseImage(env, syntheticPng({ width: 200, height: 150, marker: `${MARKER}-A` }), 'file-a.png');
-  const workerA = await nextWorker(env.track, 2); // #1 was the self-check
+  const workerA = await workerNamed(env.track, 'offlineseal-inspect');
   await workerA.worker.evaluate((marker) => {
     self.__plantedByTest = marker;
     globalThis.__fileAState = { seen: 'file A' };
@@ -103,7 +110,7 @@ test('File A and File B: different Workers; A is gone before B starts; B cannot 
   const frameB = sealedFrame(env.page);
   await setHold(frameB, true);
   await frameB.setInputFiles('#file', { name: 'file-b.png', mimeType: 'image/png', buffer: syntheticPng({ width: 120, height: 90, marker: `${MARKER}-B` }) });
-  const workerB = await nextWorker(env.track, aWorkers.length + 2); // B's self-check, then B's inspect
+  const workerB = await workerNamed(env.track, 'offlineseal-inspect', { exclude: aWorkers });
   assert.ok(!aWorkers.some((w) => w.worker === workerB.worker), 'B has its own Worker');
   assert.ok(lastAClosed <= workerB.created, 'every File A Worker closed before File B began');
 
@@ -145,7 +152,7 @@ test('within one file, a second conversion cannot see the first conversion\'s Wo
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
   await env.frame.click('#convert');
-  const first = await nextWorker(env.track, 3);
+  const first = await workerNamed(env.track, 'offlineseal-convert');
   await first.worker.evaluate(() => { self.__plantedByTest = 'conversion 1'; });
   await release(env.frame);
   await waitForShellState(env.page, 'complete');
@@ -153,7 +160,7 @@ test('within one file, a second conversion cannot see the first conversion\'s Wo
   await setHold(env.frame, true);
   await env.frame.check('#formats input[value="image/png"]');
   await env.frame.click('#convert');
-  const second = await nextWorker(env.track, 4);
+  const second = await workerNamed(env.track, 'offlineseal-convert', { exclude: [first] });
   assert.notEqual(second.worker, first.worker);
   assert.notEqual(first.closed, null, 'first conversion Worker already closed');
   assert.equal(await second.worker.evaluate(() => typeof self.__plantedByTest), 'undefined');
@@ -188,7 +195,7 @@ test('selecting another image mid-conversion terminates the running Worker', asy
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
   await env.frame.click('#convert');
-  const running = await nextWorker(env.track, 3);
+  const running = await workerNamed(env.track, 'offlineseal-convert');
   await waitForShellState(env.page, 'processing');
   assert.equal(running.closed, null, 'conversion Worker is alive');
 
@@ -199,10 +206,10 @@ test('selecting another image mid-conversion terminates the running Worker', asy
   assert.notEqual(running.closed, null, 'the running Worker was terminated with its frame');
 
   const frameB = sealedFrame(env.page);
+  const nextFileAt = Date.now();
   await chooseImage({ frame: frameB }, syntheticPng({ width: 60, height: 40 }), 'next.png');
   await waitForShellState(env.page, 'file-selected');
-  const bInspect = env.track.workers.at(-1);
-  assert.ok(running.closed <= bInspect.created, 'the old Worker was gone before the next file began');
+  assert.ok(running.closed <= nextFileAt, 'the old Worker was gone before the next file began');
   await allClosed(env.track);
   await env.context.close();
 });
@@ -213,7 +220,7 @@ test('unknown and malformed Worker messages are ignored; the job still completes
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
   await env.frame.click('#convert');
-  const live = await nextWorker(env.track, 3);
+  const live = await workerNamed(env.track, 'offlineseal-convert');
   const job = (await frameAudit(env.frame)).workers.at(-1).job;
   const appLogStart = app.log.length;
   const warningsBefore = env.consoleMessages.filter((m) => m.text.includes('Ignored worker message')).length;
@@ -281,14 +288,14 @@ test('Worker failures fail cleanly: decode error and crash, with nothing leaked 
   assert.equal(await env.page.getAttribute('body', 'data-state'), 'ready', 'shell was never told about the file');
   await allClosed(env.track);
   let audit = await frameAudit(env.frame);
-  assert.deepEqual(audit.workers[1].responses, ['processing-started', 'processing-failed']);
+  assert.deepEqual(audit.workers.find((w) => w.name === 'offlineseal-inspect').responses, ['processing-started', 'processing-failed']);
 
   // 2. A Worker that crashes mid-job.
   await chooseImage(env, syntheticPng({ width: 200, height: 100 }));
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
   await env.frame.click('#convert');
-  const doomed = await nextWorker(env.track, 4);
+  const doomed = await workerNamed(env.track, 'offlineseal-convert');
   await doomed.worker.evaluate(() => {
     setTimeout(() => {
       throw new Error('simulated worker crash');
