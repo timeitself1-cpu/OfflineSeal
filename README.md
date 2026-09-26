@@ -26,11 +26,17 @@ not OS-level isolation.
 
 ## OfflineSeal Web
 
-[`web/`](web/) is a self-contained static web application. Its first tool is an
-Image Converter at `/image`. Open the link, wait for **Ready for your file**, then
-drop an image. The image goes into a sandboxed frame. Each job (inspect, convert)
-runs there in a fresh, network-less Web Worker that is destroyed as soon as the
-job ends. The result is saved as a normal download. Nothing is uploaded.
+[`web/`](web/) is a self-contained static web application. It has two tools,
+the **Image Converter** at `/image` and **PDF Tools** (merge, split, rotate,
+reorder) at `/pdf`. Both run on one shared sealed runtime. Open a link, wait for
+**Ready for your file**, then drop your files. They go into a sandboxed frame.
+Each job runs there in a fresh, network-less Web Worker, which is destroyed as
+soon as the job ends. The result is saved as a normal download. Nothing is
+uploaded.
+
+A tool is a declarative manifest plus Worker-only code. The frame runtime is
+byte-identical for every tool, and tools cannot extend it. PDF Tools was built
+as the test of that contract: it needed no new privileges in the frame.
 
 - Architecture, security boundary, exact policies and limits: [`web/README.md`](web/README.md)
 - Deployment: [`web/deploy/README.md`](web/deploy/README.md)
@@ -54,10 +60,14 @@ not depend on it or share any code or runtime with it. Web lives entirely under
 web/                  OfflineSeal Web (static site, no server-side code)
   src/policy.mjs      every sandbox/CSP/header policy, in one place
   src/shell/          the outer, network-capable page (never touches your file)
-  src/sealed/         the sealed Image Converter (runs in the sandboxed frame)
+  src/runtime/        the sealed runtime: frame UI, Worker host, manifest schema,
+                      Worker protocol (identical for every tool)
+  src/tools/          the tools: manifest.json + Worker-only code each
+                      (image-converter/, pdf-tools/)
   build.mjs           builds web/dist/ and the host header files
   server/serve.mjs    local static server that applies the same headers
-  test/               unit + browser (Playwright/Chromium) tests
+  test/               unit + browser (Playwright: Chromium, Edge) tests,
+                      including a hostile tool that must stay contained
   deploy/             hosting guide and nginx example
   docs/               screenshots and network evidence
 ```

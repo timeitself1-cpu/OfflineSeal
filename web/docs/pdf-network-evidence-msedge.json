@@ -1,14 +1,14 @@
 {
-  "note": "Captured by web/scripts/capture-evidence.mjs. \"processing\" starts when the shell shows READY and covers choosing a 1600x1067 PNG, converting to WebP at 50%, and downloading the result. Every job runs in a fresh Worker started from the pinned in-memory Worker code.",
-  "browser": "chromium 141.0.7390.37",
+  "note": "Captured by web/scripts/capture-evidence.mjs. \"processing\" starts at READY and covers opening two PDFs, reordering/rotating/removing pages, creating a merged PDF, downloading it, and creating one PDF per page.",
+  "browser": "msedge 154.0.4258.37",
   "download": {
-    "suggestedFilename": "lake-at-dusk.webp"
+    "suggestedFilename": "signed-contract-merged.pdf"
   },
   "summary": {
     "networkRequestsDuringProcessing": 0,
-    "inMemoryWorkerStartsDuringProcessing": 2,
+    "inMemoryWorkerStartsDuringProcessing": 3,
     "serverRequestsDuringProcessing": 0,
-    "workersCreated": 3,
+    "workersCreated": 4,
     "workersStillAlive": 0
   },
   "browserRequests": {
@@ -16,9 +16,8 @@
       {
         "phase": "load",
         "method": "GET",
-        "target": "/image",
+        "target": "/pdf",
         "kind": "network",
-        "resourceType": "document",
         "initiator": "shell"
       },
       {
@@ -26,7 +25,6 @@
         "method": "GET",
         "target": "/assets/shell.css",
         "kind": "network",
-        "resourceType": "stylesheet",
         "initiator": "shell"
       },
       {
@@ -34,7 +32,6 @@
         "method": "GET",
         "target": "/assets/app.js",
         "kind": "network",
-        "resourceType": "script",
         "initiator": "shell"
       },
       {
@@ -42,7 +39,6 @@
         "method": "GET",
         "target": "/assets/protocol.js",
         "kind": "network",
-        "resourceType": "script",
         "initiator": "shell"
       },
       {
@@ -50,15 +46,20 @@
         "method": "GET",
         "target": "/assets/sealed-manifest.js",
         "kind": "network",
-        "resourceType": "script",
         "initiator": "shell"
       },
       {
         "phase": "load",
         "method": "GET",
-        "target": "/assets/sealed/image-converter.sealed.txt",
+        "target": "/assets/sealed/pdf-tools.sealed.txt",
         "kind": "network",
-        "resourceType": "fetch",
+        "initiator": "shell"
+      },
+      {
+        "phase": "load",
+        "method": "GET",
+        "target": "/assets/icon.svg",
+        "kind": "network",
         "initiator": "shell"
       },
       {
@@ -66,7 +67,6 @@
         "method": "GET",
         "target": "blob:null/<pinned Worker code>",
         "kind": "in-memory (Worker code)",
-        "resourceType": "script",
         "initiator": "sealed frame"
       }
     ],
@@ -76,7 +76,6 @@
         "method": "GET",
         "target": "blob:null/<pinned Worker code>",
         "kind": "in-memory (Worker code)",
-        "resourceType": "script",
         "initiator": "sealed frame"
       },
       {
@@ -84,30 +83,37 @@
         "method": "GET",
         "target": "blob:null/<pinned Worker code>",
         "kind": "in-memory (Worker code)",
-        "resourceType": "script",
+        "initiator": "sealed frame"
+      },
+      {
+        "phase": "processing",
+        "method": "GET",
+        "target": "blob:null/<pinned Worker code>",
+        "kind": "in-memory (Worker code)",
         "initiator": "sealed frame"
       }
     ]
   },
-  "serverRequestsDuringProcessing": [],
   "workers": [
     {
       "index": 0,
-      "createdMs": 209,
-      "closedMs": 222,
-      "aliveMs": 13
+      "createdMs": 264,
+      "closedMs": 279
     },
     {
       "index": 1,
-      "createdMs": 766,
-      "closedMs": 787,
-      "aliveMs": 21
+      "createdMs": 769,
+      "closedMs": 787
     },
     {
       "index": 2,
-      "createdMs": 1305,
-      "closedMs": 1399,
-      "aliveMs": 94
+      "createdMs": 1106,
+      "closedMs": 1135
+    },
+    {
+      "index": 3,
+      "createdMs": 1626,
+      "closedMs": 1648
     }
   ]
 }

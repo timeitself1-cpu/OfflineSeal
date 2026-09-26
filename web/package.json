@@ -18,6 +18,7 @@
     "evidence": "node scripts/capture-evidence.mjs"
   },
   "devDependencies": {
+    "pdf-lib": "1.17.1",
     "playwright": "1.56.1"
   }
 }

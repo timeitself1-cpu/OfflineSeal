@@ -2,135 +2,254 @@
 
 > The tool can have the internet, or it can have your file — never both.
 
-OfflineSeal Web is the zero-install edition of OfflineSeal. You open a link such as
-`https://offlineseal.app/image` in a normal browser. The page downloads the
-processing tool, seals it inside a browser sandbox with no network access, and
-only then lets your file in. Your file is processed on your device, and the result
-is saved as a normal download.
+OfflineSeal Web is the zero-install edition of OfflineSeal. You open a link in a
+normal browser. The page downloads the tool, seals it inside a browser sandbox
+with no network access, and only then lets your files in. Everything happens on
+your device, and results are saved as normal downloads.
 
 **Processed locally in your browser. Your original file is never uploaded by OfflineSeal.**
 
-This first release has one tool, the **Image Converter**: PNG, JPEG, WebP, GIF, BMP
-and AVIF in; PNG, JPEG or WebP out, with optional resizing.
+Tools in this release:
+
+| Path | Tool | What it does |
+|---|---|---|
+| `/image` | Image Converter | PNG, JPEG, WebP, GIF, BMP or AVIF in; PNG, JPEG or WebP out, with resizing |
+| `/pdf` | PDF Tools | Merge several PDFs; reorder, rotate and remove pages; split into one PDF per page or by ranges |
 
 | | OfflineSeal Web | OfflineSeal Desktop |
 |---|---|---|
 | Delivery | Shareable HTTPS URL, nothing to install | Local application and runtime |
-| Where the file is processed | A sandboxed frame in your browser | A disposable container on your computer |
+| Where files are processed | A disposable Worker inside a sandboxed frame in your browser | A disposable container on your computer |
 | Isolation | **Browser-enforced** (iframe sandbox + Content Security Policy) | **OS-enforced** (network namespace, `network=none`) |
 | Claim | Browser policy stops the tool from making network requests | The tool is physically disconnected from the network |
 
 The two editions share the same idea, but they do not make the same security
 claims. Web mode never claims OS-level isolation.
 
-![Converted image, ready to download](docs/screenshots/04-converted-1440.png)
+![PDF Tools: pages reordered, rotated and removed, one PDF per page](docs/screenshots/16-pdf-each-page-1440.png)
+
+---
+
+## A small trusted runtime, and tools that are only data plus Worker code
+
+OfflineSeal Web is a **runtime** plus **tools**. The runtime is the only code
+that runs in the sealed frame, and it is byte-identical for every tool. A tool
+is exactly two things:
+
+1. **A manifest** (`manifest.json`). It declares which files the tool accepts,
+   which controls to show, which output types it may produce, and its time
+   limits. The runtime validates it, then renders it using a fixed set of
+   components.
+2. **Worker code** (`*.js`). It runs only in disposable Workers: no DOM, no
+   frames, no navigation, no storage, no network. It registers two functions,
+   `inspect(files)` and `run(files, params)`.
+
+A tool **cannot** ship HTML, CSS or frame code. It cannot add a component,
+choose a download's name or extension, produce an undeclared or non-inert
+output type, or send the frame anything outside the protocol. The contract is
+in [`src/runtime/tool-schema.js`](src/runtime/tool-schema.js).
+
+```
+src/
+  runtime/                 the trusted, tool-agnostic layer
+    frame.js               runs in the sealed frame: renders manifests, runs Workers, validates results
+    frame.html, frame.css  the frame's markup and style (the same for every tool)
+    tool-schema.js         the contract: manifest schema, component vocabulary, result/param checks
+    worker-protocol.js     frame <-> Worker messages
+    worker-host.js         the generic part of every tool Worker
+    seal-check.js          the seal self-check, shared by the frame and Workers
+  tools/
+    image-converter/       manifest.json, image-core.js, tool.js
+    pdf-tools/             manifest.json, pdf-core.js, tool.js
+  shell/                   the outer page (network-capable, never touches files)
+```
+
+### The component vocabulary
+
+| Component | What the user sees | Value sent to `run` |
+|---|---|---|
+| `choice` | Segmented options. They can be narrowed by the tool's self-check (e.g. only the encoders this browser has). | one declared option |
+| `range` | Slider | number within min–max |
+| `dimensions` | Width × height, keep-proportions, % presets | `{width, height}` within the declared pixel limits |
+| `text` | Text field; only the characters in the manifest's pattern can be typed | string |
+| `hint` | A line of text, optionally shown only for some choices | — |
+| `itemList` | An ordered list, e.g. of pages: move up/down, rotate, remove/restore | `[{key, rotation}]` in the user's order |
+
+Every control can be shown only when a `choice` has certain values
+(`showWhen`). Labels and texts are plain strings rendered with `textContent`.
+
+### The test that the boundary holds
+
+The platform is only real if a second, quite different tool fits without
+special hooks. PDF Tools is that tool: multiple inputs, a page list, several
+outputs, and binary parsing. It uses exactly the same contract as the Image
+Converter. Three things are checked automatically:
+
+- **The executable frame script is byte-identical for every tool.** One CSP
+  hash covers all of them. This is checked in the build output and again live
+  in the browser (`test/unit/runtime-audit`, `test/e2e/platform`).
+- **The runtime source contains nothing tool-specific.** No "pdf", "jpeg",
+  "png", "webp" or "image/" anywhere in `frame.js`.
+- **A deliberately hostile tool is contained.** Its Worker holds the user's
+  file and tries to reach the network (fetch, POST, XHR, WebSocket,
+  EventSource, `importScripts`, a nested Worker, `eval`). It tries to return
+  an HTML download, an undeclared type, too many outputs, a fake Blob,
+  oversized text and a path-traversal file name. It posts junk outside the
+  protocol, bypasses the Worker host to rewrite its own validated result,
+  hangs, and crashes. Every attempt is contained (`test/e2e/platform`). The
+  hostile tool lives in `test/fixtures/tools/hostile` and is only ever built
+  into a private test site.
+
+### Adding a tool
+
+1. Create `src/tools/<id>/manifest.json`, using the components above.
+2. Write `src/tools/<id>/tool.js` (plus helper `.js` files, which are inlined
+   first, in name order):
+   ```js
+   OfflineSealTool.define({
+     selfCheck() { return { options: {} } },            // optional
+     async inspect(files, ctx) { return { summary, preview?, controls? } },
+     async run(files, params, ctx) { return { summary, preview?, outputs: [{ file: Blob, name, summary }] } },
+   });
+   // user-facing failure: OfflineSealTool.fail('invalid-input', 'Explain what is wrong.')
+   ```
+3. `npm run build`. The build validates the manifest with the runtime's own
+   schema, and gives the tool a shell page at its `shell.path`.
+
+No change to the runtime, the shell or the CSP is needed. If a tool seems to
+need one, the manifest contract is what should change, deliberately and in
+review.
 
 ---
 
 ## How it works
 
 ```
-User opens /image
+User opens /<tool>
   │
   ▼
 Outer shell (network-capable, same-origin only)
-  1. downloads the tool payload            GET assets/sealed/image-converter.sealed.txt
+  1. downloads the tool payload            GET assets/sealed/<tool>.sealed.txt
   2. verifies it against a pinned SHA-384  fetch(…, { integrity })   ── mismatch → refuse
   3. creates <iframe sandbox="allow-scripts allow-downloads" srcdoc=…> (inert)
   │
   ▼
-Sealed frame (opaque origin, no network): a small trusted UI + bootstrap layer
-  4. removes WebRTC, creates its one Trusted Types policy for Worker URLs,
-     then checks its own seal: origin is opaque · shell is unreachable ·
-     its own connect-src 'none' is enforced
+Sealed frame (opaque origin, no network): the runtime
+  4. removes WebRTC, reads the manifest and Worker code from the payload's
+     inert data blocks, creates its one Trusted Types policy for Worker URLs,
+     validates the manifest, then checks its own seal: origin is opaque · shell
+     is unreachable · its own connect-src 'none' is enforced
   5. starts a throwaway self-check Worker (no user data): the Worker checks its
-     own seal (opaque origin, connect-src 'none', no storage) and reports its
-     encoders → terminated
+     own seal and reports the tool's capabilities → terminated
   6. posts `frame-ready`                   ── any check fails → `seal-failed` → shell shuts it down
   │
   ▼
 Shell removes `inert`: READY
   │
   ▼
-User drops or chooses an image INSIDE the frame
-  7. frame hands the File straight to a fresh Worker ("inspect")
-       Worker: re-checks its seal → sniffs → decodes → returns info + a preview bitmap → terminated
-  8. on Convert, another fresh Worker ("convert")
-       Worker: re-checks its seal → decodes → resizes → encodes → decodes its own
-       output to verify it → returns the result Blob + a thumbnail → terminated
-  9. frame offers the Blob as <a download href="blob:…">; the browser saves it
+User drops or chooses files INSIDE the frame
+  7. runtime checks metadata only (count, size, type, name), then hands the
+     File handles to a fresh Worker: inspect → summary, preview, control values → terminated
+  8. on the action button, another fresh Worker: run → validated outputs → terminated
+  9. runtime offers each output Blob as <a download> under a name and type it controls
 ```
 
 ### Disposable Workers
 
-Every job runs in its own brand-new dedicated Worker: the READY self-check,
-inspecting a newly chosen file, and each conversion. The frame terminates the
-Worker the moment its job completes, fails, times out, or is superseded.
-Workers die with their frame.
+Every job runs in its own brand-new dedicated Worker: the READY self-check, the
+`inspect` of newly chosen files, and each `run`. The runtime terminates the
+Worker the moment its job completes, fails, times out, is superseded, or its
+result is rejected. Workers die with their frame.
 
-- **One job per Worker.** A Worker accepts a single job and ignores any
-  second one. The frame never has two Workers alive at once.
-- **One file per frame.** "Use another image" destroys the frame, and with it
+- **One job per Worker; never two Workers alive at once.**
+- **One set of files per frame.** Starting over destroys the frame, and with it
   any running Worker, before a new frame (and new Workers) exist.
-- **No state carries over.** Each Worker starts as a fresh JavaScript global.
-  Its origin is opaque, so it has no IndexedDB, no Cache Storage and no
-  cookies: nothing persists after `terminate()`. The tests plant state in
-  File A's Worker and confirm File B's Worker cannot see it.
-- **Timeouts:** 5 s for the self-check, 60 s for inspect, 120 s for convert.
-  After that the frame sends `cancel`, then terminates the Worker.
+- **No state carries over.** Each Worker is a fresh JavaScript global with an
+  opaque origin: no IndexedDB, no Cache Storage, no cookies. The tests plant
+  state in File A's Worker and confirm File B's Worker cannot see it.
+- **Timeouts** come from the manifest (capped by the runtime at 10 minutes).
+  The self-check has 5 s.
 
 The invariant: **private file bytes are processed only inside a disposable
 Worker, and destroying the Worker destroys the processing state.**
 
-### Where your file exists and where it does not
+### Where your files exist and where they do not
 
-| Place | Has the file or its bytes? |
+| Place | Has the files or their bytes? |
 |---|---|
-| Processing Worker (opaque origin, no network, no DOM, no storage, lives for one job) | **Yes.** Reads the bytes, decodes the pixels, encodes the output. |
-| Sealed frame (opaque origin, no network) | **A handle to the `File`**, which it passes to each job's Worker but never reads. **A display-sized preview bitmap** from the Worker, shown through a `bitmaprenderer` canvas; the frame never reads its pixels. **The result `Blob`**, offered for download; the frame never reads its bytes. The tests count every decode, canvas, `Blob`-read, `FileReader` and `Response` API call in the frame's realm and require zero. |
-| Your Downloads folder | The converted result, when you click Download. |
-| Outer shell page | **No.** It has no file input, never reads drop data, and receives only status messages. |
-| OfflineSeal's server | **No.** There is no upload endpoint or processing API, and no request is made after READY. |
-
-The shell learns only these status events: `frame-ready`, `seal-failed`,
-`file-selected`, `processing-started`, `processing-complete` and
-`processing-failed`. It does not even learn the file name.
+| Processing Worker (opaque origin, no network, no DOM, no storage, lives for one job) | **Yes.** Reads the bytes, decodes, processes, writes outputs. |
+| Sealed frame (the runtime) | **File handles**, which it passes to each job's Worker but never reads. **Preview bitmaps** from the Worker, shown through a `bitmaprenderer` canvas; their pixels are never read. **Output Blobs**, offered for download; their bytes are never read. The tests count every decode, canvas, `Blob`-read, `FileReader` and `Response` API call in the frame's realm and require zero, for both tools. |
+| Your Downloads folder | The outputs you click to download. |
+| Outer shell page | **No.** No file input, never reads drop data, receives only status messages, does not learn file names. |
+| OfflineSeal's server | **No.** No upload endpoint or processing API; no request is made after READY. |
 
 ### The shell ↔ frame protocol
 
-- One direction only: frame → shell. The shell never posts anything to the frame,
-  and the frame never listens for window messages.
-- Six fixed message types. Every message must have exactly the keys `protocol`,
-  `instance` and `type`, plus `code` on the two failure types, where it comes
-  from a fixed list.
-- Each message is checked for `event.source` (the live frame's window),
-  `event.origin === "null"`, the frame instance id, its exact shape, and whether
-  it is allowed in the current lifecycle state. Anything else is dropped and
-  counted.
-- No message can make the shell fetch, open, navigate, upload or run anything.
-  There is no generic operation.
+- One direction only: frame → shell. The shell never posts anything to the frame.
+- Six fixed message types: `frame-ready`, `seal-failed`, `file-selected`,
+  `processing-started`, `processing-complete`, `processing-failed`. Every
+  message has exactly the keys `protocol`, `instance` and `type`, plus `code`
+  on the two failure types, taken from a fixed list.
+- Each message is checked for `event.source`, `event.origin === "null"`, the
+  frame instance id, its exact shape, and whether it is allowed in the current
+  lifecycle state. Anything else is dropped and counted.
+- Nothing a message says can make the shell fetch, open, navigate, upload or
+  run anything.
 
 See [`src/shell/assets/protocol.js`](src/shell/assets/protocol.js).
 
-### The frame ↔ Worker protocol
+### The frame ↔ Worker protocol (the same for every tool)
 
 | Direction | Type | Exact payload (besides `protocol`) |
 |---|---|---|
 | frame → Worker | `self-check` | `job` |
-| frame → Worker | `process-image` | `job`, `operation: "inspect"`, `file` (a `File`), `previewMax {width, height}` |
-| frame → Worker | `process-image` | `job`, `operation: "convert"`, `file`, `previewMax`, `output {type, quality, width, height}` |
+| frame → Worker | `process` | `job`, `operation` (`inspect` or `run`), `files` (`File`s, within the manifest's limits), `params` (`null` for inspect; for run, validated against the manifest's controls), `previewMax` |
 | frame → Worker | `cancel` | `job` |
 | frame → Worker | `destroy` | none |
-| Worker → frame | `self-check-passed` | `job`, `encoders` (a subset of JPEG/PNG/WebP) |
+| Worker → frame | `self-check-passed` | `job`, `capabilities` (subset of declared options) |
 | Worker → frame | `processing-started` | `job` |
-| Worker → frame | `processing-complete` | `job`, `operation`, `info`, `preview` (an `ImageBitmap`); for convert also `output` (a `Blob` whose type and size must match `info`) |
-| Worker → frame | `processing-failed` | `job`, `code` from a fixed list |
+| Worker → frame | `processing-complete` | `job`, `operation`, `result` (validated against the manifest) |
+| Worker → frame | `processing-failed` | `job`, `code` (fixed list), `message` (plain text, ≤ 300 characters) |
 
-Both sides accept exact key sets only. They check the job id, and check types
-with `instanceof` against their own realm's `File`, `Blob` and `ImageBitmap`.
-Anything else is dropped: the Worker sends no reply, and the frame logs it and
-never acts on it. There is no `fetch-url`, proxy, eval, script or other generic
-command. See [`src/sealed/worker-protocol.js`](src/sealed/worker-protocol.js).
+The runtime drops unknown or malformed messages. A `processing-complete` for
+the current job that fails validation ends the job at once as
+`output-rejected`. See [`src/runtime/worker-protocol.js`](src/runtime/worker-protocol.js).
+
+---
+
+## PDF Tools
+
+PDF Tools is built on a small PDF engine written for OfflineSeal
+([`src/tools/pdf-tools/pdf-core.js`](src/tools/pdf-tools/pdf-core.js), about
+800 lines). There are **no third-party libraries in anything that ships.**
+
+- **Reads:** classic cross-reference tables, cross-reference streams, hybrid
+  files, incremental updates, object streams (Flate via the browser's
+  `DecompressionStream`, with PNG predictors), linearised files, and damaged
+  files through a scanning fallback (the UI says when this was needed).
+- **Refuses:** encrypted PDFs (with a message), non-PDFs, and more than 20
+  files, 100 MB per file, 250 MB in total, 5,000 pages or 500 outputs.
+- **Writes:** a fresh PDF of the chosen pages, in the chosen order and
+  rotation. Page content is copied byte for byte and never decoded or
+  rendered. Inherited attributes are made explicit on each page. Only objects
+  the chosen pages reference are copied. Links to pages that were left out
+  become null. Every output is re-read and checked (page count and rotations)
+  before it is offered.
+- **Deliberately not carried over:** the source documents' catalogs, meaning
+  bookmarks, interactive form definitions, attachments, document-level
+  scripts, open actions and document metadata (title, author and so on). The
+  tool says so in the UI.
+- **Not provided:** page thumbnails. They would need a PDF renderer; the list
+  shows each page's size and rotation instead.
+
+The engine is tested against committed fixtures: pdf-lib (classic and object
+streams), qpdf (regenerated object streams, linearised, AES-256 encrypted),
+Chromium's PDF printer, and hand-built files (nested page tree with inherited
+attributes, incremental update, broken cross-reference offset). Every output
+the tests produce is checked three independent ways: by pdf-lib, by
+re-parsing, and with `qpdf --check`. pdf-lib and qpdf are **test-only**
+oracles; neither is shipped. `node scripts/make-pdf-fixtures.mjs` regenerates
+the fixtures.
 
 ---
 
@@ -140,76 +259,77 @@ command. See [`src/sealed/worker-protocol.js`](src/sealed/worker-protocol.js).
 
 - **Opaque origins.** The frame is sandboxed without `allow-same-origin`, so it
   cannot read the shell's DOM, cookies or storage. Its Workers inherit the
-  opaque origin, so they have no persistent storage.
-- **No network from the frame or its Workers.** `connect-src 'none'` and
+  opaque origin and have no persistent storage.
+- **No network from the frame or any tool Worker.** `connect-src 'none'` and
   `default-src 'none'` cover fetch, XHR, `sendBeacon`, WebSocket, EventSource,
-  WebTransport and every resource type. A Worker started from a `blob:` URL
-  inherits the frame's policy; the tests probe from inside a live processing
-  Worker while it holds the file.
-- **No forms, popups or top-level navigation.** These sandbox flags are absent,
-  and `form-action 'none'` is set.
-- **No frame navigation to a URL.** The shell's `frame-src 'none'` stops the
-  frame from navigating itself or a nested frame, including to same-origin URLs
-  with data in the query string. If a navigation is attempted anyway, the shell
-  sees the extra `load` event and destroys the frame. (One browser difference
-  applies here; see below.)
-- **No code the tool didn't ship.** `script-src` allows one SHA-256 hash, with no
-  `'unsafe-inline'` and no `'unsafe-eval'`. Trusted Types allows no HTML sinks.
-  Its one policy can mint exactly one script URL: the `blob:` URL of the pinned
-  Worker code, which is embedded in the hashed script. So no other Worker,
+  WebTransport and every resource type. Workers started from a `blob:` URL
+  inherit the frame's policy. The tests probe from inside live Workers of both
+  tools while they hold the files, and from a hostile tool's Worker.
+- **No forms, popups or top-level navigation**, and no navigation of the frame
+  to a URL: the shell's `frame-src 'none'` blocks it. If a navigation is
+  attempted anyway, the shell sees the extra `load` event and destroys the
+  frame. One browser difference applies; see the threat model.
+- **No code the payload didn't ship.** `script-src` allows one SHA-256 hash (the
+  runtime), with no `'unsafe-inline'` and no `'unsafe-eval'`. Trusted Types
+  allows no HTML sinks. Its one policy can mint exactly one script URL: the
+  `blob:` URL of this payload's own Worker code. So no other Worker,
   `importScripts()` or nested `srcdoc` can run, in the frame or in a Worker.
-- **Pinned tool.** The shell uses the payload only if it matches the SHA-384
-  compiled into the shell (Subresource Integrity). That covers the Worker code
-  too.
-- **Fail closed.** If the payload doesn't match, a frame or Worker seal check
-  fails, the frame stays silent for 10 s, or the frame navigates, there is no
-  processing area and no file can be added. A Worker that cannot verify its
-  seal refuses the job before reading a single byte.
+- **Pinned tool.** The shell uses a payload only if it matches the SHA-384 in
+  the shell's registry (Subresource Integrity). The payload holds the runtime,
+  the manifest and the Worker code. The runtime script is also pinned by the
+  CSP hash. The manifest and Worker code are pinned by the payload's SRI hash,
+  and the runtime validates the manifest.
+- **Fail closed.** If the payload doesn't match, the manifest is invalid, a
+  frame or Worker seal check fails, the frame stays silent for 10 s, or the
+  frame navigates, there is no processing area and no file can be added. A
+  Worker that cannot verify its seal refuses its job before reading a byte. A
+  result that fails the contract is never shown or offered.
 
-### Threat model after the Worker refactor
+### Threat model
 
-The processing code, meaning everything that parses untrusted image bytes,
-now runs in the most restricted environment the browser offers a web page: a
-dedicated Worker with an opaque origin, no DOM, no frames, no navigation, no
-`RTCPeerConnection`, no storage, `connect-src 'none'`, and no way to load or
-evaluate more code. It lives for one job.
+The code that parses untrusted files runs in the most restricted environment
+the browser offers a web page: a dedicated Worker with an opaque origin, no
+DOM, no frames, no navigation, no `RTCPeerConnection`, no storage,
+`connect-src 'none'`, and no way to load or evaluate more code. It lives for
+one job. The hostile-tool tests show what that holds against: tool code that
+actively tries to leak what it holds.
 
-The **frame** is now a small, trusted UI and bootstrap layer. It still runs in
-a window, and a window has capabilities a Worker lacks. So the frame's code must
-stay first-party and reviewed, and the static audit enforces that it never
-touches bytes or pixels. What a *hostile frame script* could still do, if one
-ever ran there:
+The **frame runtime** is small, trusted and first-party, and it is the same
+for every tool. It runs in a window, and a window can do things a Worker
+cannot:
 
 - **WebRTC.** Neither CSP nor the sandbox governs WebRTC (STUN/TURN over UDP),
   and Chromium 141 and Edge 154 do not implement CSP3's `webrtc 'block'`. The
-  frame deletes the WebRTC constructors before any other code runs. This is
-  **JavaScript-level hardening, not a browser boundary**. Workers have no
-  `RTCPeerConnection` at all, so the processing code cannot use WebRTC.
+  runtime deletes the WebRTC constructors before any other code runs. This is
+  JavaScript-level hardening, not a browser boundary. Workers have no
+  `RTCPeerConnection` at all.
 - **Connection-only signals in Edge.** Measured: Microsoft Edge 154 opens a
   TCP connection, and so resolves the host name, to the target of a *frame
   navigation* (`<iframe src>`, meta refresh, self-navigation) before
   `frame-src 'none'` blocks it. No HTTP request is sent. Chromium 141 opens no
-  connection. In Edge, a frame script could therefore leak data through a
-  chosen host name. Workers cannot navigate or create frames, so this does not
-  apply to the processing code (the Worker probes show zero connections in
-  Edge).
+  connection. Workers cannot navigate, and the Worker probes show zero
+  connections in Edge.
 
-We do not claim that arbitrary hostile JavaScript is network-isolated by
-this design. The claim is narrower: the code that processes your file runs
-where no network channel we know of is available, and the tests hold it to
-that.
+**Outputs leave the boundary.** A download is opened later by another program
+(an image viewer, a PDF reader), outside anything a web page controls. The
+runtime therefore offers only inert types (PNG, JPEG, WebP, PDF), never HTML,
+SVG or scripts, and forces the file extension. It does not inspect what is
+inside an output. A PDF can contain links, and a hostile tool could put the
+user's data into one. PDF Tools copies each page's own annotations as they
+are, including links the user's document already had. It adds none, and it
+drops document-level scripts and open actions. For third-party tools, output
+verification by the runtime is the next thing to build.
 
-**Other limits**, stated plainly:
+We do not claim that arbitrary hostile JavaScript is network-isolated by this
+design. The claim is narrower and tested: tool code runs where no network
+channel we know of is available; the runtime accepts from it only what the
+manifest allows; and the runtime itself is shared, small and reviewable.
 
-- **DNS.** In Chromium 141, `dns-prefetch`/`preconnect` and blocked navigations
-  produced no connection, and `x-dns-prefetch-control: off` is set. A local HTTP
-  test server cannot observe DNS lookups themselves.
-- **Browser extensions** that can read page content can read the frame too.
-- **The browser itself.** The browser vendor's own services (sync, safe-browsing
-  checks on downloads, crash reports) are outside what a web page can control.
-- **The tool is first-party.** Browser policy stops the processing code from
-  using the network. It does not stop it from putting wrong pixels in your
-  output. The Image Converter is written and reviewed as part of OfflineSeal.
+**Other limits:** DNS lookups cannot be observed by a local HTTP test server
+(in Chromium 141, `dns-prefetch`/`preconnect` and blocked navigations opened no
+connection); browser extensions can read page content; the browser vendor's
+own services (sync, safe-browsing checks on downloads, crash reports) are
+outside what a web page controls.
 
 Need OS-enforced isolation instead? That is what OfflineSeal Desktop is for.
 
@@ -218,8 +338,8 @@ Need OS-enforced isolation instead? That is what OfflineSeal Desktop is for.
 ## Exact policies
 
 The policies are generated from one module, [`src/policy.mjs`](src/policy.mjs), by
-`build.mjs`. The hashes change whenever the tool's code changes; the current values
-are in `dist/build-info.json` after a build.
+`build.mjs`. The runtime hashes change when the runtime changes (not when a
+tool changes); the current values are in `dist/build-info.json` after a build.
 
 **Sealed frame sandbox** (checked on the live DOM by the tests):
 
@@ -235,29 +355,31 @@ all `allow-top-navigation*`.
 **Sealed frame CSP** (a `<meta>` in the payload; `srcdoc` documents cannot have HTTP headers):
 
 ```
-default-src 'none'; script-src 'sha256-<tool script>'; style-src 'sha256-<tool style>';
+default-src 'none'; script-src 'sha256-<runtime script>'; style-src 'sha256-<runtime style>';
 img-src 'none'; media-src 'none'; font-src 'none'; connect-src 'none'; form-action 'none';
 frame-src 'none'; child-src 'none'; worker-src blob:; object-src 'none'; manifest-src 'none';
 base-uri 'none'; require-trusted-types-for 'script'; trusted-types offlineseal-worker-script
 ```
 
 The frame also inherits the shell's header CSP below, and its Workers inherit
-both. All of them apply.
+both. All of them apply. The manifest and Worker code travel in
+`<script type="application/json">` and `<script type="text/plain">` data blocks.
+Those are never executed, so the CSP does not govern them. The runtime reads
+them, removes them from the document, and validates the manifest.
 
 **Why `worker-src blob:`.** An opaque-origin document can start a Worker only
 from a `blob:` or `data:` URL (a URL Worker must be same-origin, and an opaque
 origin is same-origin with nothing), and `blob:` is the narrower of the two.
 Trusted Types narrows it to one URL. The `offlineseal-worker-script` policy is
 created first thing in the frame; Trusted Types forbids a second policy with that
-name, and its `createScriptURL` accepts only the `blob:` URL made from the pinned
-Worker code. The tests confirm that the frame cannot start a Worker from any
-other `blob:` URL, and that a Worker cannot start one at all.
-`connect-src` is still `'none'`, and there are no third-party dependencies.
+name, and its `createScriptURL` accepts only the `blob:` URL made from the
+payload's Worker code. The tests confirm that the frame cannot start a Worker
+from any other `blob:` URL, and that a Worker cannot start one at all.
 
 **Shell CSP** (HTTP header; the page also carries the same policy as a `<meta>` fallback, without `frame-ancestors`):
 
 ```
-default-src 'none'; script-src 'self' 'sha256-<tool script>'; style-src 'self' 'sha256-<tool style>';
+default-src 'none'; script-src 'self' 'sha256-<runtime script>'; style-src 'self' 'sha256-<runtime style>';
 img-src 'self'; connect-src 'self'; frame-src 'none'; child-src 'none'; worker-src blob:;
 form-action 'none'; object-src 'none'; media-src 'none'; font-src 'none'; manifest-src 'none';
 base-uri 'none'; require-trusted-types-for 'script';
@@ -288,14 +410,14 @@ X-DNS-Prefetch-Control: off
 Strict-Transport-Security: max-age=31536000
 ```
 
-The converter needs no browser permission, so every feature is `()`. `bluetooth`
+No tool needs a browser permission, so every feature is `()`. `bluetooth`
 and `web-share` are left out because Chromium 141 reports them as unrecognised
 and ignores them. Edge 154 also does not recognise `attribution-reporting` (Edge
 ships without that API). It stays listed because Chrome has it.
 
 `Cross-Origin-Embedder-Policy` is deliberately **not** set. It would enable
-cross-origin isolation (SharedArrayBuffer), which the tool doesn't need. The CSP
-already blocks every cross-origin load, so COEP would add no protection here.
+cross-origin isolation (SharedArrayBuffer), which no tool needs. The CSP already
+blocks every cross-origin load, so COEP would add no protection here.
 
 ---
 
@@ -304,33 +426,31 @@ already blocks every cross-origin load, so COEP would add no protection here.
 ```sh
 cd web
 npm ci
-npx playwright install chromium   # not needed where Chromium is preinstalled
-npm test                          # build + 56 unit tests + 36 browser tests (Chromium)
-npm run test:edge                 # the 36 browser tests in an installed Microsoft Edge
-npm run serve                     # http://127.0.0.1:8080/image
-npm run evidence                  # screenshots + network log into docs/
+npx playwright install chromium     # not needed where Chromium is preinstalled
+npm test                            # build + 77 unit tests + 56 browser tests (Chromium)
+npm run test:edge                   # the 56 browser tests in an installed Microsoft Edge
+npm run serve                       # http://127.0.0.1:8080/image and /pdf
+npm run evidence                    # screenshots + network logs into docs/
+node scripts/make-pdf-fixtures.mjs  # regenerate PDF fixtures (needs qpdf)
 ```
 
 `OFFLINESEAL_BROWSER` picks the browser for the browser tests and for
-`npm run evidence`: `chromium` (the default, Playwright's Chromium) or any
-Playwright channel, such as `msedge` or `chrome`.
+`npm run evidence`: `chromium` (the default) or a Playwright channel such as
+`msedge` or `chrome`. With `qpdf` installed, every PDF the tests produce is also
+checked with `qpdf --check`.
 
 | Suite | What it checks |
 |---|---|
-| `test/unit/protocol` | Shell ↔ frame message allowlist and lifecycle state machine. |
-| `test/unit/worker-protocol` | Frame ↔ Worker requests and responses: exact shapes, job ids, types via `instanceof`; generic commands rejected. |
-| `test/unit/worker-runtime` | The real built Worker script in a fake Worker global: unknown requests get no reply, one job per Worker, `destroy`/`cancel`, and a Worker that cannot verify its seal refuses the file without reading a byte. |
-| `test/unit/policy` | Sandbox tokens; every CSP directive; no wildcard, scheme, `unsafe-*` or host sources, except exactly `worker-src blob:`; required headers. |
-| `test/unit/build` | Payload integrity, script/style hashes, CSP placement, no external URLs, trackers or fonts, deterministic output. |
-| `test/unit/sealed-audit` | Each part stays in its lane: the frame UI never decodes, encodes or reads bytes; all processing is in the Worker; Workers are created in one place, only via the Trusted Types policy; no network APIs, eval or HTML sinks; messages only on the protocols. |
-| `test/unit/server`, `converter-core` | Clean URLs and headers; converter maths, format sniffing, file names. |
-| `test/e2e/policy` | Live iframe sandbox, opaque origin, enforced frame CSP, response headers, Permissions-Policy, frame-ancestors. |
-| `test/e2e/network-probes` | 37 benign probe channels from the live frame and 19 from inside a live processing Worker while it holds the file. Positive controls; self-navigation; shell online but no relay. |
-| `test/e2e/worker-lifecycle` | One fresh Worker per job, all terminated, never two alive. File A's Worker is gone before File B begins, and B cannot see state planted in A. The frame realm makes zero processing or byte-reading calls. A new image mid-conversion kills the running Worker. Hostile Worker messages are ignored. Decode errors and Worker crashes fail cleanly with nothing leaked. |
-| `test/e2e/data-isolation` | A synthetic marker image end to end with the shell realm and server instrumented, plus a positive control for the detector. |
-| `test/e2e/messages` | 16 hostile shell-bound messages have no effect; messages from other windows are ignored; COOP severs openers. |
-| `test/e2e/lifecycle` | No file admission before READY; tamper, seal-failure and timeout paths fail closed; a fresh frame per image; drops on the page are ignored. |
-| `test/e2e/conversion` | PNG→JPEG/WebP/PNG, resize, alpha flattening, JPEG/GIF input, drag and drop, bad input. Outputs are decoded in a separate clean page. |
+| `test/unit/tool-schema` | The contract: every shipped manifest is valid; unknown fields, controls and ids are rejected; only inert output types; runtime caps; capability, inspect-result, run-result and parameter validation; download names chosen by the runtime. |
+| `test/unit/runtime-audit` | The runtime has nothing tool-specific; its script is byte-identical in every payload and pinned by the CSP; tools are only a manifest plus Worker-only JS (no DOM, network API, messaging or eval); the runtime never reads bytes; Workers are created in one place, via Trusted Types. |
+| `test/unit/pdf-core` | Reads 8 PDF layouts; refuses encrypted and non-PDFs; reorder/rotate/subset/merge outputs checked by pdf-lib, re-parse and qpdf; inherited attributes, dropped-page links and catalog handling; ranges; the lexer. |
+| `test/unit/worker-protocol`, `worker-runtime` | Generic Worker protocol; the real built Worker host in a fake Worker global: unknown requests get no reply, one job per Worker, no byte read without a verified seal. |
+| `test/unit/protocol`, `policy`, `build`, `server`, `image-core` | Shell protocol; every CSP directive and header; per-tool payload integrity, data blocks, and decoded Worker code free of external URLs; static server; image helpers. |
+| `test/e2e/platform` | The hostile tool (above), and the runtime byte-identical live in the browser for three tools. |
+| `test/e2e/pdf-tools` | Merge with reorder/rotate/remove; each page; ranges (typing limited to the pattern; bad ranges explained); real-world, damaged and incremental files; refusals; data isolation with markers; PDF Worker network probes. |
+| `test/e2e/worker-lifecycle` | One Worker per job, never two alive; File A's Worker gone before File B, and B cannot see A's state; zero processing calls in the frame realm; new files mid-run kill the running Worker; hostile Worker messages ignored; a malformed result ends the job; crashes fail cleanly. |
+| `test/e2e/network-probes` | 37 benign probe channels from the live frame and 19 from inside a live processing Worker; positive controls; self-navigation; shell online but no relay. |
+| `test/e2e/policy`, `lifecycle`, `messages`, `data-isolation`, `conversion` | Live sandbox, CSP and headers; READY gating and fail-closed paths; shell message allowlist; marker-based isolation for images; image conversions verified in a clean page. |
 
 The frame probe channels cover fetch (same-origin, cross-origin, POST,
 keepalive), XHR, sendBeacon, WebSocket, EventSource, WebTransport, image, SVG
@@ -348,21 +468,19 @@ and Cache Storage.
 The pass condition is that the probe servers observe **zero** HTTP requests,
 TCP connections, WebSocket upgrades and UDP packets. There is one pinned
 exception: in Edge, the three frame-navigation probes may open a single
-connection-only TCP socket each (see the threat model).
-
-The probes carry only a fixed harmless string, never file content. They show what
-the browser enforced in these runs; they are not proof against every conceivable
-browser behaviour.
+connection-only TCP socket each (see the threat model). The probes carry only a
+fixed harmless string, never file content. They show what the browser enforced
+in these runs; they are not proof against every conceivable browser behaviour.
 
 ### Browser support
 
 | Browser | Status |
 |---|---|
-| Chromium 141 (Playwright) | **Automated.** All 92 tests. |
-| Microsoft Edge 154 (stable, Linux) | **Automated.** All 36 browser tests run; 34 pass and 2 are skipped with a stated reason. Differences, each pinned exactly in the tests: (1) Edge opens a connection-only TCP socket to the target of a blocked frame navigation (Chromium does not); (2) Edge does not recognise the `attribution-reporting` Permissions-Policy feature; (3) Playwright's init scripts run *after* the frame's inline script in Edge, so the two tests that simulate a broken seal or a crashing start-up by patching the frame first cannot run there (the logic is covered in Chromium and by the Worker unit tests). |
-| Chrome | Not run separately. Its engine matches the Chromium and Edge results above, but versions differ: the Edge TCP behaviour may also exist in newer Chrome. `OFFLINESEAL_BROWSER=chrome` runs the suite where Chrome is installed. |
-| Firefox | **Not run.** Every Mozilla download host, and Playwright's browser CDN, is blocked in the environment used for this release. Expected differences, unverified: blob: Workers from an opaque-origin sandboxed frame, `OffscreenCanvas.convertToBlob`, `bitmaprenderer` and Trusted Types support all depend on the version. Without Trusted Types, the shell and frame fall back to plain strings, and the frame loses the Trusted Types restriction on which Worker URL can start. `document.featurePolicy` doesn't exist. The frame and Worker seal checks still run, so a Firefox that failed to enforce `connect-src` would fail closed. |
-| Safari | Not a target. No WebP encoder; the Worker reports that, so the frame hides the WebP option. |
+| Chromium 141 (Playwright) | **Automated.** All 133 tests. |
+| Microsoft Edge 154 (stable, Linux) | **Automated.** All 56 browser tests run: 54 pass, 2 are skipped with a stated reason. Differences, each pinned in the tests: (1) Edge opens a connection-only TCP socket to the target of a blocked frame navigation; (2) Edge does not recognise the `attribution-reporting` Permissions-Policy feature; (3) Playwright's init scripts run after the frame's inline script in Edge, so the two tests that simulate a broken seal or a crashing start-up by patching the frame first cannot run there. |
+| Chrome | Not run separately. `OFFLINESEAL_BROWSER=chrome` runs the suite where Chrome is installed. |
+| Firefox | **Not run.** Every Mozilla download host, and Playwright's browser CDN, is blocked in the environment used for this release. Unverified: blob: Workers from an opaque-origin sandboxed frame, `OffscreenCanvas.convertToBlob`, `bitmaprenderer`, `DecompressionStream` and Trusted Types all depend on the version. Without Trusted Types, the shell and runtime fall back to plain strings, and the runtime loses the Trusted Types restriction on which Worker URL can start. The frame and Worker seal checks still run, so a Firefox that failed to enforce `connect-src` would fail closed. |
+| Safari | Not a target. No WebP encoder; the Image Converter's self-check reports that, so the WebP option is hidden. |
 
 ## Deploy
 

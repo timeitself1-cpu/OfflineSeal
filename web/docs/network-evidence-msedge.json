@@ -101,21 +101,21 @@
   "workers": [
     {
       "index": 0,
-      "createdMs": 333,
-      "closedMs": 346,
-      "aliveMs": 13
+      "createdMs": 382,
+      "closedMs": 402,
+      "aliveMs": 20
     },
     {
       "index": 1,
-      "createdMs": 831,
-      "closedMs": 849,
-      "aliveMs": 18
+      "createdMs": 882,
+      "closedMs": 904,
+      "aliveMs": 22
     },
     {
       "index": 2,
-      "createdMs": 1255,
-      "closedMs": 1369,
-      "aliveMs": 114
+      "createdMs": 1303,
+      "closedMs": 1367,
+      "aliveMs": 64
     }
   ]
 }

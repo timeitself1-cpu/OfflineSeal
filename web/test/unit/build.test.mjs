@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { build } from '../../build.mjs';
 import { INSTANCE_PLACEHOLDER, sealedFrameCsp, shellCsp, siteHeaders } from '../../src/policy.mjs';
@@ -39,13 +40,14 @@ const manifestBlock = (payload) => JSON.parse(/<script type="application\/json" 
 
 test('every tool payload matches its pinned integrity, and the registry lists it', async () => {
   assert.ok(tools().length >= 2);
-  const registry = await read('assets/sealed-manifest.js');
-  assert.ok(registry.includes('"allow-scripts","allow-downloads"'));
-  assert.ok(registry.includes(`sha256-${info.runtimeScriptHash}`));
+  const { SEALED_RUNTIME, SEALED_TOOLS } = await import(pathToFileURL(join(DIST, 'assets/sealed-manifest.js')).href);
+  assert.deepEqual([...SEALED_RUNTIME.sandbox], ['allow-scripts', 'allow-downloads']);
+  assert.equal(SEALED_RUNTIME.runtimeScriptHash, `sha256-${info.runtimeScriptHash}`);
+  assert.deepEqual(Object.keys(SEALED_TOOLS).sort(), Object.keys(info.tools).sort());
   for (const [id, t] of tools()) {
     const payload = await read(t.payloadPath);
     assert.equal(t.integrity, `sha384-${sha('sha384', payload)}`, id);
-    assert.ok(registry.includes(t.integrity), id);
+    assert.equal(SEALED_TOOLS[id].integrity, t.integrity, id);
     assert.equal(manifestBlock(payload).id, id);
     assert.equal(createHash('sha256').update(workerSource(payload), 'utf8').digest('hex'), t.workerSourceSha256);
   }

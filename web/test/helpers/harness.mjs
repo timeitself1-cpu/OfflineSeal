@@ -132,7 +132,7 @@ export const SHELL_AUDIT_SCRIPT = `(() => {
   wrapGetter(HTMLInputElement.prototype, 'files', 'fileInputReads');
 })();`;
 
-export async function openTool(browser, app, { viewport = { width: 1280, height: 900 }, audit = true, initScripts = [], beforeGoto } = {}) {
+export async function openTool(browser, app, { viewport = { width: 1280, height: 900 }, audit = true, initScripts = [], beforeGoto, path = 'image' } = {}) {
   const context = await browser.newContext({ acceptDownloads: true, viewport });
   if (audit) await context.addInitScript(SHELL_AUDIT_SCRIPT);
   for (const script of initScripts) await context.addInitScript(script);
@@ -142,7 +142,7 @@ export async function openTool(browser, app, { viewport = { width: 1280, height:
   page.on('console', (m) => consoleMessages.push({ type: m.type(), text: m.text() }));
   page.on('pageerror', (e) => pageErrors.push(e.message));
   if (beforeGoto) await beforeGoto(page, context);
-  const response = await page.goto(`${app.origin}/image`);
+  const response = await page.goto(`${app.origin}/${path}`);
   return { context, page, response, consoleMessages, pageErrors };
 }
 

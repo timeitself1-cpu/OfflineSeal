@@ -18,9 +18,10 @@ Serve `web/dist/` over **HTTPS**. The host must:
    a `<meta>` tag, so a host that drops headers still gets most of the protection
    (everything except `frame-ancestors`, Permissions-Policy, COOP and CORP). Such
    a host is still **not a supported deployment**.
-2. **Map clean URLs**: `/image` → `image.html`, `/` → `index.html`.
-3. **Serve `.txt` as `text/plain`**. The tool payload
-   (`assets/sealed/image-converter.sealed.txt`) is data for the shell, never a page.
+2. **Map clean URLs**: `/image` → `image.html`, `/pdf` → `pdf.html`, `/` → `index.html`.
+3. **Serve `.txt` as `text/plain`**. The tool payloads
+   (`assets/sealed/<tool-id>.sealed.txt`, one per tool) are data for the shell,
+   never pages.
 4. **Not rewrite the files.** Injected analytics snippets, "rocket loaders",
    minifiers or HTML rewriting would change the pinned hashes. The page would then
    refuse to run, which is the intended fail-closed behaviour.
@@ -28,14 +29,15 @@ Serve `web/dist/` over **HTTPS**. The host must:
    `nginx-security-headers.conf`. They are build outputs for configuring the
    host. They contain no secrets, but there is no reason to publish them.
 
-Headers are per build. The CSP contains hashes of the tool's code, so redeploy
+Headers are per build. The CSP contains hashes of the runtime's code, so redeploy
 `_headers` (or the nginx snippet) together with the files every time you build.
 
 ## Cloudflare Pages
 
 - Build command: `cd web && npm ci && npm run build`
 - Output directory: `web/dist`
-- `_headers` in the output is applied automatically, and `/image` serves `image.html`.
+- `_headers` in the output is applied automatically, and `/image` and `/pdf`
+  serve `image.html` and `pdf.html`.
 
 ## Netlify
 
@@ -43,7 +45,7 @@ Headers are per build. The CSP contains hashes of the tool's code, so redeploy
 - Build command: `npm ci && npm run build`
 - Publish directory: `dist`
 - `_headers` in the publish directory is applied automatically, and pretty URLs
-  serve `image.html` at `/image`.
+  serve `image.html` at `/image` and `pdf.html` at `/pdf`.
 
 ## nginx
 
@@ -59,19 +61,19 @@ recommended.
 
 ## Checking a deployment
 
-Open `https://<your-host>/image`, then open DevTools:
+Open `https://<your-host>/image` (and `/pdf`), then open DevTools:
 
 - **Network tab:** only the page, `shell.css`, `app.js`, `protocol.js`,
-  `sealed-manifest.js` and the `.sealed.txt` payload load from the network. After
-  "Ready for your file", converting and downloading an image adds **no network
-  requests**. You will see one `blob:null/…` entry per job (inspecting the
-  image, each conversion). That is a fresh processing Worker starting from the
+  `sealed-manifest.js` and that tool's `.sealed.txt` payload load from the
+  network. After "Ready for your file", processing and downloading adds **no
+  network requests**. You will see one `blob:null/…` entry per job (inspecting
+  the files, each run). That is a fresh processing Worker starting from the
   pinned Worker code, which is held in memory; it is not a network request.
 - **Console:** each seal check shows as a refused `data:` fetch
   (`Refused to connect to 'data:text/plain,offlineseal-seal-check'`). There is one
   from the frame, and one from each processing Worker before it touches your
   file. Those entries are the checks proving `connect-src 'none'` is enforced;
   they are expected.
-- **Response headers of `/image`:** they match `dist/_headers`.
+- **Response headers of `/image` and `/pdf`:** they match `dist/_headers`.
 - **Technical details** at the bottom of the page: they show the live sandbox, the
   observed frame origin (`null`) and both CSPs.

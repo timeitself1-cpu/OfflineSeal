@@ -11,6 +11,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import zlib from 'node:zlib';
 
 import { build } from '../build.mjs';
+import { readFileSync } from 'node:fs';
 import { BROWSER, launchBrowser, startApp, openTool, waitForShellState, sealedFrame, downloadResult, sleep, trackWorkers } from '../test/helpers/harness.mjs';
 
 const OUT = new URL('../docs/', import.meta.url);
@@ -162,6 +163,74 @@ const t0 = Date.now();
   const evidenceName = NETWORK_ONLY ? `network-evidence-${BROWSER}.json` : 'network-evidence.json';
   await writeFile(new URL(evidenceName, OUT), JSON.stringify(evidence, null, 2) + '\n');
   console.log(JSON.stringify(evidence, null, 2));
+  await env.context.close();
+}
+
+// 2b. PDF Tools: merge two PDFs with pages reordered, rotated and removed,
+//     with the same network log; then "each page" to show several outputs.
+{
+  const fixture = (name) => readFileSync(new URL(`../test/fixtures/pdf/${name}`, import.meta.url));
+  const pdfRequests = [];
+  let pdfPhase = 'load';
+  let pdfTrack;
+  const t1 = Date.now();
+  const env = await openTool(browser, app, {
+    path: 'pdf',
+    viewport: { width: 1440, height: 900 },
+    audit: false,
+    beforeGoto: (page) => {
+      pdfTrack = trackWorkers(page);
+      page.on('request', (r) => {
+        const url = r.url();
+        const inMemory = url.startsWith('blob:');
+        pdfRequests.push({ phase: pdfPhase, method: r.method(), target: inMemory ? 'blob:null/<pinned Worker code>' : new URL(url).pathname, kind: inMemory ? 'in-memory (Worker code)' : 'network', initiator: r.frame() === page.mainFrame() ? 'shell' : 'sealed frame' });
+      });
+    },
+  });
+  await waitForShellState(env.page, 'ready');
+  const serverAtReady = app.log.length;
+  pdfPhase = 'processing';
+  await sleep(400);
+  await shot(env.page, '13-pdf-ready-1440');
+  const frame = sealedFrame(env.page);
+  await frame.setInputFiles('#file', [
+    { name: 'signed-contract.pdf', mimeType: 'application/pdf', buffer: fixture('chromium-2.pdf') },
+    { name: 'scanned-receipts.pdf', mimeType: 'application/pdf', buffer: fixture('objstm-4.pdf') },
+  ]);
+  await waitForShellState(env.page, 'file-selected');
+  const op = (key, o) => frame.click(`[data-control="pages"] li[data-key="${key}"] button[data-op="${o}"]`);
+  await op('1:3', 'up');
+  await op('1:1', 'rotate-left');
+  await op('1:2', 'remove');
+  await shot(env.page, '14-pdf-pages-1440');
+  await frame.click('#action');
+  await waitForShellState(env.page, 'complete');
+  await sleep(200);
+  await shot(env.page, '15-pdf-merged-1440');
+  const merged = await downloadResult({ ...env, frame });
+  await frame.check('[data-control="mode"] input[value="each"]');
+  await frame.click('#action');
+  await waitForShellState(env.page, 'complete');
+  await sleep(200);
+  await shot(env.page, '16-pdf-each-page-1440');
+  await sleep(500);
+  const processing = pdfRequests.filter((r) => r.phase === 'processing');
+  const pdfEvidence = {
+    note: 'Captured by web/scripts/capture-evidence.mjs. "processing" starts at READY and covers opening two PDFs, reordering/rotating/removing pages, creating a merged PDF, downloading it, and creating one PDF per page.',
+    browser: `${BROWSER} ${browser.version()}`,
+    download: { suggestedFilename: merged.name },
+    summary: {
+      networkRequestsDuringProcessing: processing.filter((r) => r.kind === 'network').length,
+      inMemoryWorkerStartsDuringProcessing: processing.filter((r) => r.kind !== 'network').length,
+      serverRequestsDuringProcessing: app.log.slice(serverAtReady).length,
+      workersCreated: pdfTrack.workers.length,
+      workersStillAlive: pdfTrack.workers.filter((w) => w.closed === null).length,
+    },
+    browserRequests: { load: pdfRequests.filter((r) => r.phase === 'load'), processing },
+    workers: pdfTrack.workers.map((w, i) => ({ index: i, createdMs: w.created - t1, closedMs: w.closed === null ? null : w.closed - t1 })),
+  };
+  await writeFile(new URL(NETWORK_ONLY ? `pdf-network-evidence-${BROWSER}.json` : 'pdf-network-evidence.json', OUT), JSON.stringify(pdfEvidence, null, 2) + '\n');
+  console.log(JSON.stringify(pdfEvidence.summary));
   await env.context.close();
 }
 

@@ -1,0 +1,76 @@
+{
+  "manifest": "offlineseal.tool.v1",
+  "id": "pdf-tools",
+  "version": "1.0.0",
+  "name": "PDF Tools",
+  "shell": {
+    "path": "pdf",
+    "title": "PDF Tools",
+    "lede": "Merge, split, rotate and reorder PDF pages without uploading them.",
+    "restartLabel": "Use other PDFs"
+  },
+  "input": {
+    "accept": ["application/pdf"],
+    "extensions": [".pdf"],
+    "minFiles": 1,
+    "maxFiles": 20,
+    "maxBytesPerFile": 104857600,
+    "maxTotalBytes": 262144000,
+    "dropTitle": "Drop PDFs here",
+    "dropSubtitle": "One or more PDF files · stays on this device",
+    "chooseLabel": "Choose PDFs"
+  },
+  "outputs": {
+    "types": [{ "type": "application/pdf", "label": "PDF" }],
+    "maxFiles": 500
+  },
+  "controls": [
+    {
+      "type": "itemList",
+      "id": "pages",
+      "label": "Pages",
+      "itemNoun": "page",
+      "reorder": true,
+      "rotate": true,
+      "remove": true,
+      "minItems": 1,
+      "maxItems": 5000
+    },
+    {
+      "type": "choice",
+      "id": "mode",
+      "label": "Create",
+      "options": [
+        { "value": "merge", "label": "One PDF" },
+        { "value": "each", "label": "Each page" },
+        { "value": "ranges", "label": "By ranges" }
+      ],
+      "default": "merge"
+    },
+    {
+      "type": "text",
+      "id": "ranges",
+      "label": "Page ranges",
+      "placeholder": "e.g. 1-3, 4, 5-8",
+      "maxLength": 500,
+      "default": "",
+      "pattern": "0-9 ,-",
+      "showWhen": { "control": "mode", "in": ["ranges"] }
+    },
+    {
+      "type": "hint",
+      "id": "ranges-hint",
+      "text": "Numbers follow the page order shown. Each range becomes its own PDF.",
+      "showWhen": { "control": "mode", "in": ["ranges"] }
+    },
+    {
+      "type": "hint",
+      "id": "each-hint",
+      "text": "Every page becomes its own PDF.",
+      "showWhen": { "control": "mode", "in": ["each"] }
+    }
+  ],
+  "action": { "label": "Create PDF" },
+  "limits": { "inspectTimeoutMs": 120000, "runTimeoutMs": 300000 },
+  "notes": ["Bookmarks, form fields, attachments, scripts and document metadata are not copied into the new PDFs."]
+}

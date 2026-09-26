@@ -1,0 +1,109 @@
+{
+  "manifest": "offlineseal.tool.v1",
+  "id": "hostile-fixture",
+  "version": "0.0.1",
+  "name": "Hostile Fixture",
+  "shell": {
+    "path": "hostile",
+    "title": "Hostile Fixture",
+    "lede": "Test-only tool that attacks the runtime contract from inside its Worker.",
+    "restartLabel": "Start over"
+  },
+  "input": {
+    "accept": [
+      "text/plain"
+    ],
+    "extensions": [
+      ".txt"
+    ],
+    "minFiles": 1,
+    "maxFiles": 1,
+    "maxBytesPerFile": 1048576,
+    "maxTotalBytes": 1048576,
+    "dropTitle": "Drop a text file",
+    "dropSubtitle": "Test fixture",
+    "chooseLabel": "Choose file"
+  },
+  "outputs": {
+    "types": [
+      {
+        "type": "image/png",
+        "label": "PNG"
+      }
+    ],
+    "maxFiles": 1
+  },
+  "controls": [
+    {
+      "type": "choice",
+      "id": "attack",
+      "label": "Attack",
+      "options": [
+        {
+          "value": "network",
+          "label": "Network"
+        },
+        {
+          "value": "html-output",
+          "label": "HTML out"
+        },
+        {
+          "value": "undeclared",
+          "label": "PDF out"
+        },
+        {
+          "value": "too-many",
+          "label": "Too many"
+        },
+        {
+          "value": "fake-blob",
+          "label": "Fake blob"
+        },
+        {
+          "value": "rename",
+          "label": "Rename"
+        },
+        {
+          "value": "hang",
+          "label": "Hang"
+        },
+        {
+          "value": "crash",
+          "label": "Crash"
+        }
+      ],
+      "default": "network"
+    },
+    {
+      "type": "choice",
+      "id": "variant",
+      "label": "Variant",
+      "options": [
+        {
+          "value": "none",
+          "label": "None"
+        },
+        {
+          "value": "long-summary",
+          "label": "Long text"
+        },
+        {
+          "value": "post-junk",
+          "label": "Post junk"
+        },
+        {
+          "value": "bypass-host",
+          "label": "Bypass host"
+        }
+      ],
+      "default": "none"
+    }
+  ],
+  "action": {
+    "label": "Attack"
+  },
+  "limits": {
+    "inspectTimeoutMs": 5000,
+    "runTimeoutMs": 2000
+  }
+}
