@@ -1,6 +1,6 @@
 {
   "note": "Captured by web/scripts/capture-evidence.mjs. \"processing\" starts when the shell shows READY and covers choosing a 1600x1067 PNG, converting to WebP at 50%, and downloading the result. Every job runs in a fresh Worker started from the pinned in-memory Worker code.",
-  "browser": "chromium 141.0.7390.37",
+  "browser": "msedge 154.0.4258.37",
   "download": {
     "suggestedFilename": "lake-at-dusk.webp"
   },
@@ -64,6 +64,14 @@
       {
         "phase": "load",
         "method": "GET",
+        "target": "/assets/icon.svg",
+        "kind": "network",
+        "resourceType": "other",
+        "initiator": "shell"
+      },
+      {
+        "phase": "load",
+        "method": "GET",
         "target": "blob:null/<pinned Worker code>",
         "kind": "in-memory (Worker code)",
         "resourceType": "script",
@@ -93,21 +101,21 @@
   "workers": [
     {
       "index": 0,
-      "createdMs": 186,
-      "closedMs": 200,
-      "aliveMs": 14
+      "createdMs": 333,
+      "closedMs": 346,
+      "aliveMs": 13
     },
     {
       "index": 1,
-      "createdMs": 759,
-      "closedMs": 778,
-      "aliveMs": 19
+      "createdMs": 831,
+      "closedMs": 849,
+      "aliveMs": 18
     },
     {
       "index": 2,
-      "createdMs": 1263,
-      "closedMs": 1328,
-      "aliveMs": 65
+      "createdMs": 1255,
+      "closedMs": 1369,
+      "aliveMs": 114
     }
   ]
 }
