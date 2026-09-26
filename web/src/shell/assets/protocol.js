@@ -19,6 +19,7 @@ export const SEAL_FAILURE_CODES = Object.freeze([
   'csp-not-enforced',
   'webrtc-available',
   'missing-capability',
+  'worker-check-failed',
 ]);
 
 export const PROCESSING_FAILURE_CODES = Object.freeze([
@@ -27,6 +28,7 @@ export const PROCESSING_FAILURE_CODES = Object.freeze([
   'output-type-unsupported',
   'output-verification-failed',
   'too-large',
+  'worker-failed',
 ]);
 
 // type -> the exact set of keys that type's message must have (no more, no fewer)

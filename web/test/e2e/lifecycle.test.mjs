@@ -4,7 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { syntheticPng } from '../helpers/synthetic-image.mjs';
-import { launchBrowser, startApp, openTool, readyTool, waitForShellState, chooseImage, convertTo, sleep, pollFrame } from '../helpers/harness.mjs';
+import { BROWSER, launchBrowser, startApp, openTool, readyTool, waitForShellState, chooseImage, convertTo, sleep, pollFrame } from '../helpers/harness.mjs';
 
 const PAYLOAD = '/assets/sealed/image-converter.sealed.txt';
 
@@ -128,7 +128,16 @@ test('a tampered tool payload is refused (fail closed)', async () => {
   await env.context.close();
 });
 
-test('a frame whose seal self-check fails never opens (fail closed)', async () => {
+// These two simulate a broken browser or a crashing tool by patching the frame
+// *before* its script runs, via a Playwright init script. Measured: in Chromium
+// the init script runs before the frame's inline script; in Edge 154 it runs
+// after it (the body already exists and the seal check has started). So the
+// simulation cannot be expressed in Edge through Playwright. The fail-closed
+// logic itself is browser-independent JavaScript, covered here in Chromium and
+// by test/unit/worker-runtime.test.mjs for the Worker.
+const PRE_SCRIPT_INJECTION = BROWSER === 'chromium' ? false : `init scripts run after the frame script in ${BROWSER}`;
+
+test('a frame whose seal self-check fails never opens (fail closed)', { skip: PRE_SCRIPT_INJECTION }, async () => {
   // Simulate a browser where connect-src is not enforced: fetch "succeeds".
   const env = await openTool(browser, app, {
     initScripts: [`if (window !== window.top) window.fetch = () => Promise.resolve(new Response('simulated'));`],
@@ -140,7 +149,7 @@ test('a frame whose seal self-check fails never opens (fail closed)', async () =
   await env.context.close();
 });
 
-test('a frame that never reports READY is shut down after the timeout', async () => {
+test('a frame that never reports READY is shut down after the timeout', { skip: PRE_SCRIPT_INJECTION }, async () => {
   const env = await openTool(browser, app, {
     // Simulate a tool that crashes during start-up.
     initScripts: [`if (window !== window.top) Document.prototype.getElementById = () => { throw new Error('simulated crash'); };`],

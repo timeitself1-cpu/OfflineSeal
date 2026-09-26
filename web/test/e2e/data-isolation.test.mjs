@@ -47,12 +47,13 @@ test('the file and its bytes stay in the sealed frame; the shell and server neve
   await chooseImage(env, image, FILE_NAME);
   await waitForShellState(env.page, 'file-selected');
   // The image really is inside the frame (preview has pixels).
-  const previewPainted = await env.frame.evaluate(() => {
-    const c = document.getElementById('preview-canvas');
-    const d = c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data;
-    return d[3] === 255;
+  // The image really is inside the frame: the Worker handed back a preview,
+  // shown through a 'bitmaprenderer' canvas.
+  const preview = await env.frame.evaluate(() => {
+    const c = document.querySelector('#preview-box canvas');
+    return c ? [c.width, c.height] : null;
   });
-  assert.ok(previewPainted);
+  assert.ok(preview && preview[0] > 1 && preview[1] > 1, `preview ${preview}`);
 
   await convertTo(env, 'image/jpeg');
   const jpeg = await downloadResult(env);
@@ -95,11 +96,23 @@ test('the file and its bytes stay in the sealed frame; the shell and server neve
   }
   assert.deepEqual(probe.log, []);
 
-  // 5. Browser-side view: no request from any frame after READY.
+  // 5. Browser-side view: after READY, the only loads are each job's Worker
+  // starting from the pinned Worker code. That is an in-memory blob: URL owned
+  // by the sealed frame: one per job (inspect, JPEG, WebP), and never a
+  // network request.
   const processingRequests = requests.filter((r) => r.time >= readyAt);
-  assert.deepEqual(processingRequests, [], 'the browser issued requests during processing');
+  const networkDuringProcessing = processingRequests.filter((r) => !r.url.startsWith('blob:null/'));
+  assert.deepEqual(networkDuringProcessing, [], 'the browser issued network requests during processing');
+  assert.equal(processingRequests.length, 3, 'one Worker start per job');
+  assert.equal(new Set(processingRequests.map((r) => r.url)).size, 1, 'every Worker starts from the same pinned code URL');
+  assert.ok(processingRequests.every((r) => r.frame === 'sealed' && r.method === 'GET' && r.body === ''));
   const loadRequests = requests.filter((r) => r.time < readyAt);
-  assert.ok(loadRequests.every((r) => r.frame === 'shell' && r.method === 'GET' && r.url.startsWith(app.origin)));
+  // Before READY: the shell's own same-origin files, plus the self-check
+  // Worker starting from the same pinned blob: code URL (no user data involved).
+  const shellLoads = loadRequests.filter((r) => r.frame === 'shell');
+  const frameLoads = loadRequests.filter((r) => r.frame === 'sealed');
+  assert.ok(shellLoads.every((r) => r.method === 'GET' && r.url.startsWith(app.origin)));
+  assert.deepEqual(frameLoads.map((r) => r.url), [processingRequests[0].url], 'the frame loads nothing but the self-check Worker');
   t.diagnostic(`requests before READY: ${loadRequests.map((r) => new URL(r.url).pathname).join(', ')}`);
 
   // 6. The results exist only as local downloads.

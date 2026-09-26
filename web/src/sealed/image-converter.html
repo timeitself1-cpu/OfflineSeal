@@ -22,7 +22,7 @@
       <p class="message" id="dz-message" role="alert" hidden></p>
     </div>
     <figure class="preview" id="preview" hidden>
-      <div class="canvas-box"><canvas id="preview-canvas" aria-label="Preview of your image"></canvas></div>
+      <div class="canvas-box" id="preview-box"></div>
       <figcaption><strong id="source-name"></strong><span id="source-meta"></span></figcaption>
     </figure>
   </section>
@@ -55,7 +55,7 @@
     <button type="button" class="primary wide" id="convert" disabled>Convert</button>
     <p class="message" id="message" role="alert" hidden></p>
     <div class="result" id="result" hidden>
-      <div class="result-thumb"><canvas id="result-canvas" aria-label="Preview of the converted image"></canvas></div>
+      <div class="result-thumb" id="result-thumb"></div>
       <div class="result-text">
         <strong id="result-meta"></strong>
         <span id="result-note"></span>

@@ -28,8 +28,9 @@ not OS-level isolation.
 
 [`web/`](web/) is a self-contained static web application. Its first tool is an
 Image Converter at `/image`. Open the link, wait for **Ready for your file**, then
-drop an image. The image is converted in a sandboxed frame in your browser and
-saved as a normal download. Nothing is uploaded.
+drop an image. The image goes into a sandboxed frame. Each job (inspect, convert)
+runs there in a fresh, network-less Web Worker that is destroyed as soon as the
+job ends. The result is saved as a normal download. Nothing is uploaded.
 
 - Architecture, security boundary, exact policies and limits: [`web/README.md`](web/README.md)
 - Deployment: [`web/deploy/README.md`](web/deploy/README.md)

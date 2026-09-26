@@ -1,40 +1,51 @@
-// The sealed image converter's DOM glue. It runs only inside the sandboxed,
-// opaque-origin processing frame. The build inlines it after converter-core.js
-// and a generated line that defines PROTOCOL_ID. All three become the frame's
-// single hash-pinned script.
+// The sealed frame: a small, trusted UI and bootstrap layer. It runs only
+// inside the sandboxed, opaque-origin processing frame. The build inlines it
+// after converter-core.js, worker-protocol.js, seal-check.js and a generated
+// preamble that defines PROTOCOL_ID and WORKER_SOURCE (the pinned Worker
+// code). Together they form the frame's single hash-pinned script.
+//
+// Division of labour:
+//   frame   picks up the File, shows the UI, and runs one disposable Worker per
+//           job. It never reads the file's bytes, and never decodes, resizes or
+//           encodes. It only displays the preview bitmap the Worker hands back,
+//           and offers the result Blob for download.
+//   worker  does everything that touches bytes or pixels (image-worker.js).
 //
 // What this code must never do (enforced by browser policy, and audited by
 // test/unit/sealed-audit.test.mjs):
-//   - use a network API (the one exception is the data: URL self-check below,
-//     which never leaves the browser)
+//   - use a network API (the one exception is the data: URL seal check, which
+//     never leaves the browser)
 //   - send the shell anything except the fixed status messages
-//   - listen for messages from anywhere
+//   - listen for messages from anything but its own Workers
 
-/* global SealedCore, PROTOCOL_ID */
+/* global SealedCore, WorkerProtocol, SealCheck, PROTOCOL_ID, WORKER_SOURCE */
 
-// --- 1. Remove WebRTC before anything else runs ------------------------------
-// WebRTC traffic (STUN/TURN over UDP) is governed by neither CSP nor the iframe
-// sandbox in current browsers. In testing, Chromium 141 sent STUN packets from
-// this exact sandbox and CSP. The converter never needs WebRTC, so the
-// constructors are deleted here, before any other code in this frame runs.
-// This is JavaScript-level hardening, not a browser-enforced boundary. It is
-// meaningful because this frame cannot load or evaluate any other code:
-// script-src is one hash, there is no 'unsafe-eval', and Trusted Types 'none'
-// blocks nested srcdoc documents.
-for (const name of Object.getOwnPropertyNames(window)) {
-  if (/^(webkit|moz)?RTC/.test(name)) {
-    try {
-      delete window[name];
-    } catch {
-      /* non-configurable: the seal check below catches it */
-    }
-  }
-}
+// --- 1. Before anything else runs --------------------------------------------------
+// a) Remove WebRTC. WebRTC traffic (STUN/TURN over UDP) is governed by neither
+//    CSP nor the iframe sandbox. In testing, Chromium 141 sent STUN packets
+//    from this exact sandbox and CSP. This is JavaScript-level hardening, not
+//    a browser-enforced boundary; see the README's threat model.
+SealCheck.removeWebRtc(window);
+
+// b) The only way this frame can create a Worker. The frame CSP allows Workers
+//    only from blob: URLs (worker-src blob:), and Trusted Types requires every
+//    Worker URL to come from a named policy. This policy is created here,
+//    first, and Trusted Types forbids a second policy with the same name. It
+//    accepts exactly one URL: the blob: URL of the pinned Worker code.
+const WORKER_CODE_URL = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' }));
+const workerUrlPolicy = window.trustedTypes
+  ? window.trustedTypes.createPolicy('offlineseal-worker-script', {
+      createScriptURL(url) {
+        if (url !== WORKER_CODE_URL) throw new TypeError('OfflineSeal: refusing a Worker URL that is not the pinned Worker code');
+        return url;
+      },
+    })
+  : null;
 
 const Core = SealedCore;
 const INSTANCE = document.querySelector('meta[name="offlineseal-instance"]')?.content ?? '';
 
-// --- 2. The only outbound channel: fixed status messages to the shell -------
+// --- 2. The only channel to the shell: fixed status messages ----------------------
 function post(type, code) {
   const message = { protocol: PROTOCOL_ID, instance: INSTANCE, type };
   if (code) message.code = code;
@@ -43,7 +54,99 @@ function post(type, code) {
   window.parent.postMessage(message, '*');
 }
 
-// --- 3. Elements -------------------------------------------------------------
+// --- 3. Disposable Workers: one per job ---------------------------------------------
+// A job is a self-check (before READY, no user data), an inspect (decode and
+// preview a newly chosen file), or a convert. Each job gets a brand-new Worker
+// that is terminated when the job completes, fails, times out, or is
+// superseded. There is never more than one Worker alive, so no Worker state can
+// reach another job or another file. (Each new file also gets a new frame.)
+const JOB_TIMEOUT_MS = { 'self-check': 5_000, inspect: 60_000, convert: 120_000 };
+const PREVIEW_MAX = { width: 1600, height: 1600 };
+const THUMB_MAX = { width: 128, height: 128 };
+let activeJob = null;
+
+function randomId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function spawnWorker(operation) {
+  const url = workerUrlPolicy ? workerUrlPolicy.createScriptURL(WORKER_CODE_URL) : WORKER_CODE_URL;
+  return new Worker(url, { name: `offlineseal-${operation}` });
+}
+
+// Runs one job in a fresh Worker. Resolves to { ok: true, ...validated response }
+// or { ok: false, code }. The Worker is always destroyed before this resolves.
+function runJob(operation, body, { onStarted } = {}) {
+  cancelActiveJob();
+  const id = randomId();
+  const worker = spawnWorker(operation);
+  const job = { id, worker, operation, settled: false, timer: 0, finish: null };
+  activeJob = job;
+
+  return new Promise((resolve) => {
+    job.finish = (result) => {
+      if (job.settled) return;
+      job.settled = true;
+      clearTimeout(job.timer);
+      destroyWorker(job);
+      resolve(result);
+    };
+    job.timer = setTimeout(() => {
+      worker.postMessage({ protocol: WorkerProtocol.ID, type: 'cancel', job: id });
+      job.finish({ ok: false, code: 'worker-timeout' });
+    }, JOB_TIMEOUT_MS[operation]);
+
+    worker.addEventListener('message', (event) => {
+      if (job.settled) return;
+      const verdict = WorkerProtocol.validateResponse(event.data, { Blob, ImageBitmap }, { job: id, operation });
+      if (!verdict.ok) {
+        // Unknown or malformed: dropped, never acted on. A Worker that never
+        // sends a valid answer runs into the timeout.
+        console.warn(`[OfflineSeal frame] Ignored worker message: ${verdict.reason}`);
+        return;
+      }
+      if (verdict.type === 'processing-started') {
+        if (onStarted) onStarted();
+        return;
+      }
+      if (verdict.type === 'processing-failed') return job.finish({ ok: false, code: verdict.code });
+      job.finish(verdict);
+    });
+    // An uncaught error inside the Worker, or a message that cannot be
+    // deserialised, ends the job (fail closed).
+    worker.addEventListener('error', (event) => {
+      event.preventDefault();
+      job.finish({ ok: false, code: 'worker-crashed' });
+    });
+    worker.addEventListener('messageerror', () => job.finish({ ok: false, code: 'worker-crashed' }));
+
+    const request = { protocol: WorkerProtocol.ID, type: operation === 'self-check' ? 'self-check' : 'process-image', job: id, ...body };
+    worker.postMessage(request);
+  });
+}
+
+function destroyWorker(job) {
+  try {
+    job.worker.postMessage({ protocol: WorkerProtocol.ID, type: 'destroy' });
+  } catch {
+    /* already gone */
+  }
+  // terminate() is what actually ends the Worker and discards its memory. The
+  // destroy message only asks it to close itself as well.
+  job.worker.terminate();
+  if (activeJob === job) activeJob = null;
+}
+
+function cancelActiveJob() {
+  if (activeJob && activeJob.finish) activeJob.finish({ ok: false, code: 'superseded' });
+  activeJob = null;
+}
+
+// Closing or navigating the frame's document terminates its Workers too. This
+// makes the intent explicit.
+window.addEventListener('pagehide', cancelActiveJob);
+
+// --- 4. Elements -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const el = {
   dropzone: $('dropzone'),
@@ -52,7 +155,7 @@ const el = {
   choose: $('choose'),
   input: $('file'),
   preview: $('preview'),
-  previewCanvas: $('preview-canvas'),
+  previewBox: $('preview-box'),
   sourceName: $('source-name'),
   sourceMeta: $('source-meta'),
   settings: $('settings'),
@@ -66,7 +169,7 @@ const el = {
   scales: $('scales'),
   convert: $('convert'),
   result: $('result'),
-  resultCanvas: $('result-canvas'),
+  resultThumb: $('result-thumb'),
   resultMeta: $('result-meta'),
   resultNote: $('result-note'),
   formatHint: $('format-hint'),
@@ -74,13 +177,14 @@ const el = {
   messages: [$('dz-message'), $('message')],
 };
 
-// --- 4. State ----------------------------------------------------------------
-// sealing -> ready -> loaded <-> processing -> done
+// --- 5. State ----------------------------------------------------------------------
+// sealing -> ready -> opening -> loaded <-> processing -> done
 // The file input and drop target accept a file only in `ready`: after the
-// seal check has passed, and before this frame has taken any file. The shell
-// creates a fresh frame for every new image.
+// seal checks (frame and Worker) have passed, and before this frame has taken
+// any file. The shell creates a fresh frame for every new image.
 let state = 'sealing';
-let source = null; // { file, bitmap, type }
+// The File handle (never read here), plus facts the Worker reported about it.
+let source = null; // { file, info: { type, width, height } }
 let supportedOutputs = [];
 let resultUrl = null;
 
@@ -102,7 +206,22 @@ function showMessage(text) {
   }
 }
 
-// --- 5. Seal self-check --------------------------------------------------------
+// Show a bitmap produced by a Worker. The 'bitmaprenderer' context takes
+// ownership of the bitmap for display. The frame draws nothing and reads no
+// pixels.
+function showBitmap(box, bitmap, label) {
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  canvas.setAttribute('aria-label', label);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.style.width = `${Math.max(1, Math.round(bitmap.width / dpr))}px`;
+  canvas.style.aspectRatio = `${bitmap.width} / ${bitmap.height}`;
+  canvas.getContext('bitmaprenderer').transferFromImageBitmap(bitmap);
+  box.replaceChildren(canvas);
+}
+
+// --- 6. Seal self-check --------------------------------------------------------------
 // Runs before any file is accepted. If a check fails, the frame never becomes
 // ready and the shell shows that the processing area is unavailable (fail
 // closed).
@@ -117,138 +236,58 @@ async function verifySeal() {
   } catch {
     /* expected: the shell is cross-origin to this frame */
   }
-  if (Object.getOwnPropertyNames(window).some((n) => /^(webkit|moz)?RTCPeerConnection$/.test(n))) {
-    return 'webrtc-available';
+  if (!SealCheck.removeWebRtc(window)) return 'webrtc-available';
+  if (!(await SealCheck.connectIsBlocked(document))) return 'csp-not-enforced';
+  if (typeof Worker !== 'function') return 'missing-capability';
+  // A throwaway Worker proves that Workers can be created only as intended,
+  // are sealed (opaque origin, connect-src 'none', no storage), and can encode.
+  // It never sees user data and is terminated right after.
+  let check;
+  try {
+    check = await runJob('self-check', {});
+  } catch {
+    return 'worker-check-failed';
   }
-  if (!(await connectIsBlocked())) return 'csp-not-enforced';
-  if (typeof createImageBitmap !== 'function' || typeof HTMLCanvasElement.prototype.toBlob !== 'function') {
-    return 'missing-capability';
-  }
+  if (!check.ok) return 'worker-check-failed';
+  supportedOutputs = check.encoders;
+  if (supportedOutputs.length === 0) return 'missing-capability';
   return null;
 }
 
-// Confirm that this document's own connect-src 'none' policy is being enforced.
-// It tries to fetch a data: URL: if the policy were missing, that request would
-// still never touch the network. Two things must both happen: the fetch is
-// refused, and the browser reports a violation of a policy that says
-// connect-src 'none'. That second part proves it is this frame's own policy,
-// not only the one inherited from the shell.
-function connectIsBlocked() {
-  return new Promise((resolve) => {
-    let refused = false;
-    let reported = false;
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      document.removeEventListener('securitypolicyviolation', onViolation);
-      resolve(value);
-    };
-    const onViolation = (e) => {
-      if (e.effectiveDirective === 'connect-src' && /(^|;)\s*connect-src 'none'/.test(e.originalPolicy)) {
-        reported = true;
-        if (refused) finish(true);
-      }
-    };
-    const timer = setTimeout(() => finish(false), 3000);
-    document.addEventListener('securitypolicyviolation', onViolation);
-    fetch('data:text/plain,offlineseal-seal-check').then(
-      () => finish(false),
-      () => {
-        refused = true;
-        if (reported) finish(true);
-      },
-    );
-  });
-}
+// --- 7. File admission: straight to a Worker ----------------------------------------------
+const INSPECT_ERRORS = {
+  'too-large': `This file is larger than ${Core.formatBytes(Core.LIMITS.maxInputBytes)}.`,
+  'not-an-image': 'This file is not a supported image. Choose a PNG, JPEG, WebP, GIF, BMP or AVIF image.',
+  'decode-failed': 'This image could not be read by your browser.',
+  'too-many-pixels': 'This image has too many pixels to convert safely in the browser.',
+};
 
-async function detectEncoders() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 2;
-  canvas.height = 2;
-  canvas.getContext('2d').fillRect(0, 0, 1, 1);
-  const found = [];
-  for (const type of Object.keys(Core.OUTPUT_TYPES)) {
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, type, 0.9));
-    // Browsers fall back to PNG for encoders they lack. Only offer a format if
-    // the encoder really produced it.
-    if (blob && blob.type === type) found.push(type);
-  }
-  return found;
-}
-
-// --- 6. File admission ---------------------------------------------------------
 async function admit(file) {
   if (state !== 'ready' || !file) return;
-  setState('loaded-pending');
+  setState('opening');
   showMessage('');
-  try {
-    if (file.size > Core.LIMITS.maxInputBytes) {
-      throw userError(`This file is larger than ${Core.formatBytes(Core.LIMITS.maxInputBytes)}.`);
-    }
-    const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
-    const type = Core.sniffImageType(head);
-    if (!type) throw userError('This file is not a supported image. Choose a PNG, JPEG, WebP, GIF, BMP or AVIF image.');
-    let bitmap;
-    try {
-      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    } catch {
-      throw userError(`This ${Core.INPUT_LABELS[type]} image could not be read by your browser.`);
-    }
-    if (bitmap.width * bitmap.height > Core.LIMITS.maxInputPixels) {
-      bitmap.close();
-      throw userError('This image has too many pixels to convert safely in the browser.');
-    }
-    source = { file, bitmap, type };
-  } catch (err) {
+  // The File goes straight to a fresh Worker. The frame never reads it.
+  const result = await runJob('inspect', { operation: 'inspect', file, previewMax: PREVIEW_MAX });
+  if (!result.ok) {
     setState('ready');
-    showMessage(err && err.userMessage ? err.userMessage : 'This file could not be opened.');
+    showMessage(INSPECT_ERRORS[result.code] || 'This file could not be opened.');
     return;
   }
-
+  source = { file, info: result.info };
   setState('loaded');
   post('file-selected');
-  renderSource();
+  el.sourceName.textContent = file.name || 'Image';
+  el.sourceMeta.textContent = `${Core.INPUT_LABELS[result.info.type]} · ${result.info.width} × ${result.info.height} · ${Core.formatBytes(file.size)}`;
+  el.preview.hidden = false;
+  el.settings.hidden = false;
+  showBitmap(el.previewBox, result.preview, 'Preview of your image');
   configureSettings();
 }
 
-function userError(message) {
-  const err = new Error(message);
-  err.userMessage = message;
-  return err;
-}
-
-// --- 7. Rendering ----------------------------------------------------------------
-function drawFitted(canvas, bitmap) {
-  const box = canvas.parentElement.getBoundingClientRect();
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const maxW = Math.max(1, Math.floor(box.width));
-  const maxH = Math.max(1, Math.floor(box.height));
-  const scale = Math.min(1, maxW / bitmap.width, maxH / bitmap.height);
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
-  const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-}
-
-function renderSource() {
-  const { file, bitmap, type } = source;
-  el.sourceName.textContent = file.name || 'Image';
-  el.sourceMeta.textContent = `${Core.INPUT_LABELS[type]} · ${bitmap.width} × ${bitmap.height} · ${Core.formatBytes(file.size)}`;
-  el.preview.hidden = false;
-  el.settings.hidden = false;
-  drawFitted(el.previewCanvas, bitmap);
-}
-
+// --- 8. Settings ---------------------------------------------------------------------
 function configureSettings() {
   el.formats.replaceChildren();
-  const initial = Core.defaultOutputType(source.type, supportedOutputs);
+  const initial = Core.defaultOutputType(source.info.type, supportedOutputs);
   for (const type of supportedOutputs) {
     const info = Core.OUTPUT_TYPES[type];
     const label = document.createElement('label');
@@ -263,7 +302,7 @@ function configureSettings() {
     label.append(radio, span);
     el.formats.append(label);
   }
-  setSize(Core.scaleSize(source.bitmap.width, source.bitmap.height, 100));
+  setSize(Core.scaleSize(source.info.width, source.info.height, 100));
   syncQualityVisibility();
   invalidateResult();
 }
@@ -285,15 +324,15 @@ function setSize({ width, height }) {
   el.width.value = String(width);
   el.height.value = String(height);
   for (const b of el.scales.querySelectorAll('button')) {
-    const s = Core.scaleSize(source.bitmap.width, source.bitmap.height, Number(b.dataset.scale));
+    const s = Core.scaleSize(source.info.width, source.info.height, Number(b.dataset.scale));
     b.setAttribute('aria-pressed', String(s.width === width && s.height === height));
   }
 }
 
 function onSizeInput(changed) {
   const size = Core.fitSize({
-    sourceWidth: source.bitmap.width,
-    sourceHeight: source.bitmap.height,
+    sourceWidth: source.info.width,
+    sourceHeight: source.info.height,
     width: Number(el.width.value),
     height: Number(el.height.value),
     keepAspect: el.keepAspect.checked,
@@ -311,15 +350,19 @@ function invalidateResult() {
   if (state === 'done') setState('loaded');
 }
 
-// --- 8. Conversion -------------------------------------------------------------
+// --- 9. Conversion: in a fresh Worker ----------------------------------------------------
+// Worker failure codes the shell's protocol knows. Anything else (a crash, a
+// timeout, a failed per-job seal check) is reported as 'worker-failed'.
+const SHELL_FAILURE_CODES = ['decode-failed', 'encode-failed', 'output-type-unsupported', 'output-verification-failed', 'too-large'];
+
 async function convert() {
   if (state !== 'loaded' && state !== 'done') return;
   invalidateResult();
   const type = selectedType();
-  const info = Core.OUTPUT_TYPES[type];
+  const spec = Core.OUTPUT_TYPES[type];
   const target = Core.fitSize({
-    sourceWidth: source.bitmap.width,
-    sourceHeight: source.bitmap.height,
+    sourceWidth: source.info.width,
+    sourceHeight: source.info.height,
     width: Number(el.width.value),
     height: Number(el.height.value),
     keepAspect: false,
@@ -328,65 +371,35 @@ async function convert() {
   showMessage('');
   post('processing-started');
 
-  let failure = 'encode-failed';
-  try {
-    const canvas = render(source.bitmap, target, !info.alpha);
-    const quality = info.lossy ? Number(el.quality.value) / 100 : undefined;
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, type, quality));
-    if (!blob) throw new Error('encoder returned nothing');
-    failure = 'output-type-unsupported';
-    if (blob.type !== type) throw new Error('encoder fell back to another format');
-
-    // Decode our own output before offering it, and check it is the format
-    // and size we promised (fail closed).
-    failure = 'output-verification-failed';
-    const check = new Uint8Array(await blob.slice(0, 32).arrayBuffer());
-    if (Core.sniffImageType(check) !== type) throw new Error('output signature mismatch');
-    const decoded = await createImageBitmap(blob);
-    if (decoded.width !== target.width || decoded.height !== target.height) throw new Error('output size mismatch');
-
-    resultUrl = URL.createObjectURL(blob);
-    el.download.href = resultUrl;
-    el.download.download = Core.outputFileName(source.file.name, type);
-    el.download.textContent = `Download ${info.label}`;
-    el.resultMeta.textContent = `${info.label} · ${target.width} × ${target.height} · ${Core.formatBytes(blob.size)}`;
-    el.resultNote.textContent = Core.sizeChange(source.file.size, blob.size);
-    el.result.hidden = false;
-    drawFitted(el.resultCanvas, decoded);
-    decoded.close();
-    el.result.scrollIntoView({ block: 'nearest' });
-    setState('done');
-    post('processing-complete');
-  } catch {
+  const result = await runJob('convert', {
+    operation: 'convert',
+    file: source.file,
+    previewMax: THUMB_MAX,
+    output: { type, quality: spec.lossy ? Number(el.quality.value) / 100 : null, width: target.width, height: target.height },
+  });
+  if (!result.ok) {
     setState('loaded');
     showMessage('That conversion did not work. Try another format or a smaller size.');
-    post('processing-failed', failure);
+    post('processing-failed', SHELL_FAILURE_CODES.includes(result.code) ? result.code : 'worker-failed');
+    return;
   }
+
+  // The frame holds the result Blob only to offer it for download. It never
+  // reads the Blob's bytes.
+  resultUrl = URL.createObjectURL(result.output);
+  el.download.href = resultUrl;
+  el.download.download = Core.outputFileName(source.file.name, type);
+  el.download.textContent = `Download ${spec.label}`;
+  el.resultMeta.textContent = `${spec.label} · ${result.info.width} × ${result.info.height} · ${Core.formatBytes(result.info.size)}`;
+  el.resultNote.textContent = Core.sizeChange(source.file.size, result.info.size);
+  el.result.hidden = false;
+  showBitmap(el.resultThumb, result.preview, 'Preview of the converted image');
+  el.result.scrollIntoView({ block: 'nearest' });
+  setState('done');
+  post('processing-complete');
 }
 
-function render(bitmap, target, flattenOnWhite) {
-  let current = bitmap;
-  let canvas = null;
-  for (const step of Core.downscaleSteps(bitmap.width, bitmap.height, target.width, target.height)) {
-    canvas = document.createElement('canvas');
-    canvas.width = step.width;
-    canvas.height = step.height;
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(current, 0, 0, step.width, step.height);
-    current = canvas;
-  }
-  if (flattenOnWhite) {
-    const ctx = canvas.getContext('2d');
-    ctx.globalCompositeOperation = 'destination-over';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  }
-  return canvas;
-}
-
-// --- 9. Events -----------------------------------------------------------------
+// --- 10. Events ----------------------------------------------------------------------
 el.input.accept = Core.ACCEPT_ATTRIBUTE;
 el.choose.addEventListener('click', () => {
   if (state === 'ready') el.input.click();
@@ -433,20 +446,12 @@ el.keepAspect.addEventListener('change', () => onSizeInput('width'));
 el.scales.addEventListener('click', (e) => {
   const button = e.target.closest('button[data-scale]');
   if (!button || !source) return;
-  setSize(Core.scaleSize(source.bitmap.width, source.bitmap.height, Number(button.dataset.scale)));
+  setSize(Core.scaleSize(source.info.width, source.info.height, Number(button.dataset.scale)));
   invalidateResult();
 });
 el.convert.addEventListener('click', convert);
 
-let resizeTimer = 0;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    if (source) drawFitted(el.previewCanvas, source.bitmap);
-  }, 100);
-});
-
-// --- 10. Start: seal first, then open for a file --------------------------------
+// --- 11. Start: seal first, then open for a file --------------------------------------
 setState('sealing');
 (async () => {
   const failure = await verifySeal();
@@ -454,11 +459,6 @@ setState('sealing');
     el.dzTitle.textContent = 'Processing area unavailable';
     el.dzSub.textContent = 'The security checks did not pass, so no file can be added here.';
     post('seal-failed', failure);
-    return;
-  }
-  supportedOutputs = await detectEncoders();
-  if (supportedOutputs.length === 0) {
-    post('seal-failed', 'missing-capability');
     return;
   }
   el.dzTitle.textContent = 'Drop image here';

@@ -47,6 +47,12 @@ export const FORBIDDEN_SANDBOX_TOKENS = Object.freeze([
 // creates, so it can tell one frame instance's messages from another's.
 export const INSTANCE_PLACEHOLDER = '__OFFLINESEAL_FRAME_INSTANCE__';
 
+// The Trusted Types policy the sealed frame creates, first thing, to start its
+// processing Workers. Trusted Types allows only one policy per name, so no
+// later code can create another. Its createScriptURL accepts only the blob: URL
+// of the pinned Worker code.
+export const SEALED_WORKER_TRUSTED_TYPES_POLICY = 'offlineseal-worker-script';
+
 // ---------------------------------------------------------------------------
 // Sealed processing frame: Content-Security-Policy
 // ---------------------------------------------------------------------------
@@ -73,15 +79,24 @@ export function sealedFrameCsp({ scriptHash, styleHash }) {
     ['form-action', "'none'"],
     ['frame-src', "'none'"],
     ['child-src', "'none'"],
-    ['worker-src', "'none'"],
+    // Image processing runs in disposable Workers. An opaque-origin frame can
+    // only start a Worker from a blob: or data: URL, and blob: is the narrower
+    // of the two. It is narrowed further by Trusted Types (below): the one
+    // policy that can mint a Worker URL accepts only the blob: URL of the
+    // pinned Worker code embedded in this payload's hashed script. A Worker
+    // created from a blob: URL inherits this document's policies, so it also
+    // gets connect-src 'none'.
+    ['worker-src', 'blob:'],
     ['object-src', "'none'"],
     ['manifest-src', "'none'"],
     ['base-uri', "'none'"],
-    // No HTML-from-string sinks at all. The converter builds its DOM with
-    // createElement/textContent. This also stops the frame from creating a
-    // nested srcdoc document to get a fresh, unhardened JavaScript realm.
+    // No HTML-from-string sinks at all: the frame builds its DOM with
+    // createElement/textContent, so there is no createHTML policy. That also
+    // stops the frame from creating a nested srcdoc document to get a fresh,
+    // unhardened JavaScript realm. Script URLs (Worker, importScripts) need a
+    // TrustedScriptURL, and only the named Worker policy can produce one.
     ['require-trusted-types-for', "'script'"],
-    ['trusted-types', "'none'"],
+    ['trusted-types', SEALED_WORKER_TRUSTED_TYPES_POLICY],
   ]);
 }
 
@@ -117,7 +132,11 @@ export function shellCsp({ scriptHash, styleHash }, { forHeader = true } = {}) {
     // leak data by doing location.href = 'https://example/?data=...'.
     ['frame-src', "'none'"],
     ['child-src', "'none'"],
-    ['worker-src', "'none'"],
+    // Needed only because the srcdoc frame inherits this policy, and its
+    // Workers are blob: Workers. The shell itself cannot start a Worker: under
+    // Trusted Types a Worker URL must come from a policy with createScriptURL,
+    // and the shell's only policy has none.
+    ['worker-src', 'blob:'],
     ['form-action', "'none'"],
     ['object-src', "'none'"],
     ['media-src', "'none'"],
@@ -126,8 +145,10 @@ export function shellCsp({ scriptHash, styleHash }, { forHeader = true } = {}) {
     ['base-uri', "'none'"],
     // The only HTML-from-string sink in the shell is iframe.srcdoc. The named
     // Trusted Types policy only accepts the integrity-verified tool payload.
+    // The frame's Worker policy name is listed because the frame inherits this
+    // directive; the shell never creates that policy.
     ['require-trusted-types-for', "'script'"],
-    ['trusted-types', SHELL_TRUSTED_TYPES_POLICY],
+    ['trusted-types', SHELL_TRUSTED_TYPES_POLICY, SEALED_WORKER_TRUSTED_TYPES_POLICY],
   ];
   if (forHeader) directives.push(['frame-ancestors', "'none'"]);
   return serializeCsp(directives);

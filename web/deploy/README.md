@@ -62,11 +62,16 @@ recommended.
 Open `https://<your-host>/image`, then open DevTools:
 
 - **Network tab:** only the page, `shell.css`, `app.js`, `protocol.js`,
-  `sealed-manifest.js` and the `.sealed.txt` payload load. After "Ready for your
-  file", converting and downloading an image adds **no** requests.
-- **Console:** the frame's seal check shows as a refused `data:` fetch
-  (`Refused to connect to 'data:text/plain,offlineseal-seal-check'`). That entry is
-  the check proving `connect-src 'none'` is enforced; it is expected.
+  `sealed-manifest.js` and the `.sealed.txt` payload load from the network. After
+  "Ready for your file", converting and downloading an image adds **no network
+  requests**. You will see one `blob:null/…` entry per job (inspecting the
+  image, each conversion). That is a fresh processing Worker starting from the
+  pinned Worker code, which is held in memory; it is not a network request.
+- **Console:** each seal check shows as a refused `data:` fetch
+  (`Refused to connect to 'data:text/plain,offlineseal-seal-check'`). There is one
+  from the frame, and one from each processing Worker before it touches your
+  file. Those entries are the checks proving `connect-src 'none'` is enforced;
+  they are expected.
 - **Response headers of `/image`:** they match `dist/_headers`.
 - **Technical details** at the bottom of the page: they show the live sandbox, the
   observed frame origin (`null`) and both CSPs.

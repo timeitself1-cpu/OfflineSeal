@@ -43,12 +43,21 @@ function fill(template, values, label) {
 }
 
 export async function buildSealedPayload() {
-  const [core, ui, style, template] = await Promise.all([
-    readFile(join(SRC, 'sealed/converter-core.js'), 'utf8'),
-    readFile(join(SRC, 'sealed/converter-ui.js'), 'utf8'),
-    readFile(join(SRC, 'sealed/image-converter.css'), 'utf8'),
-    readFile(join(SRC, 'sealed/image-converter.html'), 'utf8'),
+  const read = (name) => readFile(join(SRC, 'sealed', name), 'utf8');
+  const [core, workerProtocol, sealCheck, worker, ui, style, template] = await Promise.all([
+    read('converter-core.js'),
+    read('worker-protocol.js'),
+    read('seal-check.js'),
+    read('image-worker.js'),
+    read('converter-ui.js'),
+    read('image-converter.css'),
+    read('image-converter.html'),
   ]);
+
+  // The processing Worker's code. It is embedded as a string constant in the
+  // frame's inline script, so the frame's script hash (and the payload's SRI
+  // hash) pin it too. The frame turns it into a blob: URL to start Workers.
+  const workerScript = ['(() => {', "'use strict';", core.trim(), workerProtocol.trim(), sealCheck.trim(), worker.trim(), '})();'].join('\n');
 
   // One IIFE, so nothing leaks onto the frame's window except through
   // deliberate assignments (there are none).
@@ -56,12 +65,17 @@ export async function buildSealedPayload() {
     '(() => {',
     "'use strict';",
     `const PROTOCOL_ID = ${JSON.stringify(PROTOCOL_ID)};`,
+    `const WORKER_SOURCE = ${JSON.stringify(workerScript)};`,
     core.trim(),
+    workerProtocol.trim(),
+    sealCheck.trim(),
     ui.trim(),
     '})();',
   ].join('\n');
 
-  if (/<\/script|<!--/i.test(script)) throw new Error('sealed script contains a sequence that would break inlining');
+  for (const [label, code] of [['worker', workerScript], ['frame', script]]) {
+    if (/<\/script|<!--/i.test(code)) throw new Error(`sealed ${label} script contains a sequence that would break inlining`);
+  }
   if (/<\/style/i.test(style)) throw new Error('sealed style contains </style');
 
   const hashes = { scriptHash: sha('sha256', script), styleHash: sha('sha256', style) };
@@ -76,7 +90,7 @@ export async function buildSealedPayload() {
     },
     'sealed payload',
   );
-  return { payload, script, style, hashes, csp, integrity: `sha384-${sha('sha384', payload)}` };
+  return { payload, script, workerScript, style, hashes, csp, integrity: `sha384-${sha('sha384', payload)}` };
 }
 
 export async function build({ outDir = DIST, quiet = false } = {}) {
@@ -124,6 +138,7 @@ export async function build({ outDir = DIST, quiet = false } = {}) {
     payloadPath: PAYLOAD_PATH,
     integrity: sealed.integrity,
     scriptHash: sealed.hashes.scriptHash,
+    workerSourceSha256: createHash('sha256').update(sealed.workerScript, 'utf8').digest('hex'),
     styleHash: sealed.hashes.styleHash,
     sandbox: SEALED_FRAME_SANDBOX.join(' '),
     sealedCsp: sealed.csp,

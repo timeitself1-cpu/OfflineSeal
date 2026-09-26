@@ -11,7 +11,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import zlib from 'node:zlib';
 
 import { build } from '../build.mjs';
-import { launchBrowser, startApp, openTool, waitForShellState, sealedFrame, downloadResult, sleep } from '../test/helpers/harness.mjs';
+import { BROWSER, launchBrowser, startApp, openTool, waitForShellState, sealedFrame, downloadResult, sleep, trackWorkers } from '../test/helpers/harness.mjs';
 
 const OUT = new URL('../docs/', import.meta.url);
 const SHOTS = new URL('screenshots/', OUT);
@@ -69,10 +69,14 @@ const photo = landscapePng(1600, 1067);
 const browser = await launchBrowser();
 const app = await startApp();
 const slowApp = await startApp({ delays: { '/assets/sealed/image-converter.sealed.txt': 4000 } });
-const shot = (page, name) => page.screenshot({ path: new URL(`${name}.png`, SHOTS).pathname, fullPage: true });
+// Screenshots come from Playwright's Chromium. With OFFLINESEAL_BROWSER set (for
+// example to msedge), only the network evidence is captured, into its own file.
+const NETWORK_ONLY = BROWSER !== 'chromium';
+const shot = (page, name, options = {}) =>
+  NETWORK_ONLY ? Promise.resolve() : page.screenshot({ path: new URL(`${name}.png`, SHOTS).pathname, fullPage: true, ...options });
 
 // 1. Preparing (the tool download is held back so the state is visible).
-{
+if (!NETWORK_ONLY) {
   const env = await openTool(browser, slowApp, { viewport: { width: 1440, height: 900 }, audit: false });
   await sleep(700);
   await shot(env.page, '01-preparing-1440');
@@ -82,20 +86,28 @@ const shot = (page, name) => page.screenshot({ path: new URL(`${name}.png`, SHOT
 // 2. The full flow at 1440 wide, with the network log.
 const requests = [];
 let phase = 'load';
+let workerTrack;
+const t0 = Date.now();
 {
   const env = await openTool(browser, app, {
     viewport: { width: 1440, height: 900 },
     audit: false,
     beforeGoto: (page) => {
-      page.on('request', (r) =>
+      workerTrack = trackWorkers(page);
+      page.on('request', (r) => {
+        const url = r.url();
+        const inMemory = url.startsWith('blob:');
         requests.push({
           phase,
           method: r.method(),
-          path: new URL(r.url()).pathname,
+          // Worker starts load the pinned Worker code from an in-memory blob:
+          // URL owned by the sealed frame. They never touch the network.
+          target: inMemory ? 'blob:null/<pinned Worker code>' : new URL(url).pathname,
+          kind: inMemory ? 'in-memory (Worker code)' : 'network',
           resourceType: r.resourceType(),
           initiator: r.frame() === page.mainFrame() ? 'shell' : 'sealed frame',
-        }),
-      );
+        });
+      });
     },
   });
   await waitForShellState(env.page, 'ready');
@@ -118,24 +130,46 @@ let phase = 'load';
   await sleep(500);
   const serverDuringProcessing = app.log.slice(serverAtReady).map((e) => `${e.method} ${e.path}`);
   await env.page.click('.info summary');
-  await env.page.screenshot({ path: new URL('05-info-1440.png', SHOTS).pathname });
+  await shot(env.page, '05-info-1440', { fullPage: false });
   await env.page.click('.info summary');
   await env.page.click('#tech summary');
   await shot(env.page, '06-technical-details-1440');
 
+  const processing = requests.filter((r) => r.phase === 'processing');
   const evidence = {
-    note: 'Captured by web/scripts/capture-evidence.mjs in headless Chromium. "processing" starts when the shell shows READY and covers choosing a 1600x1067 PNG, converting to WebP at 50%, and downloading the result.',
-    browser: `Chromium ${browser.version()}`,
+    note: 'Captured by web/scripts/capture-evidence.mjs. "processing" starts when the shell shows READY and covers choosing a 1600x1067 PNG, converting to WebP at 50%, and downloading the result. Every job runs in a fresh Worker started from the pinned in-memory Worker code.',
+    browser: `${BROWSER} ${browser.version()}`,
     download: { suggestedFilename: dl.name },
+    summary: {
+      networkRequestsDuringProcessing: processing.filter((r) => r.kind === 'network').length,
+      inMemoryWorkerStartsDuringProcessing: processing.filter((r) => r.kind !== 'network').length,
+      serverRequestsDuringProcessing: serverDuringProcessing.length,
+      workersCreated: workerTrack.workers.length,
+      workersStillAlive: workerTrack.workers.filter((w) => w.closed === null).length,
+    },
     browserRequests: {
       load: requests.filter((r) => r.phase === 'load'),
-      processing: requests.filter((r) => r.phase === 'processing'),
+      processing,
     },
     serverRequestsDuringProcessing: serverDuringProcessing,
+    workers: workerTrack.workers.map((w, i) => ({
+      index: i,
+      createdMs: w.created - t0,
+      closedMs: w.closed === null ? null : w.closed - t0,
+      aliveMs: w.closed === null ? null : w.closed - w.created,
+    })),
   };
-  await writeFile(new URL('network-evidence.json', OUT), JSON.stringify(evidence, null, 2) + '\n');
+  const evidenceName = NETWORK_ONLY ? `network-evidence-${BROWSER}.json` : 'network-evidence.json';
+  await writeFile(new URL(evidenceName, OUT), JSON.stringify(evidence, null, 2) + '\n');
   console.log(JSON.stringify(evidence, null, 2));
   await env.context.close();
+}
+
+if (NETWORK_ONLY) {
+  await browser.close();
+  await app.close();
+  await slowApp.close();
+  process.exit(0);
 }
 
 // 3. Ready state at common desktop widths.

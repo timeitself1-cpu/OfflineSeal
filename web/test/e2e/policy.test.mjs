@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { parseCsp, FORBIDDEN_SANDBOX_TOKENS } from '../../src/policy.mjs';
-import { launchBrowser, startApp, startProbe, readyTool } from '../helpers/harness.mjs';
+import { BROWSER, launchBrowser, startApp, startProbe, readyTool } from '../helpers/harness.mjs';
 
 let browser, app, probe, env;
 before(async () => {
@@ -78,13 +78,15 @@ test('frame has an opaque origin and cannot reach the shell', async () => {
 test('frame CSP as enforced in the live document', async () => {
   const policy = await env.frame.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content);
   const csp = parseCsp(policy);
-  for (const d of ['default-src', 'connect-src', 'form-action', 'object-src', 'frame-src', 'child-src', 'worker-src', 'base-uri', 'font-src', 'manifest-src', 'media-src', 'img-src']) {
+  for (const d of ['default-src', 'connect-src', 'form-action', 'object-src', 'frame-src', 'child-src', 'base-uri', 'font-src', 'manifest-src', 'media-src', 'img-src']) {
     assert.deepEqual(csp.get(d), ["'none'"], d);
   }
+  assert.deepEqual(csp.get('worker-src'), ['blob:']);
+  assert.deepEqual(csp.get('trusted-types'), ['offlineseal-worker-script']);
   assert.equal(csp.get('script-src').length, 1);
   assert.match(csp.get('script-src')[0], /^'sha256-/);
   assert.match(csp.get('style-src')[0], /^'sha256-/);
-  for (const [, values] of csp) for (const v of values) assert.doesNotMatch(v, BROAD);
+  for (const [name, values] of csp) for (const v of values) if (!(name === 'worker-src' && v === 'blob:')) assert.doesNotMatch(v, BROAD, name);
   // The shell's "Technical details" shows the same policy that is enforced.
   assert.equal(await env.page.textContent('#tech-frame-csp'), policy);
   // The policy is live: a blocked data: fetch raises a violation event of *this* policy.
@@ -132,7 +134,8 @@ test('shell response headers as sent to the browser', async () => {
   assert.deepEqual(csp.get('form-action'), ["'none'"]);
   assert.deepEqual(csp.get('object-src'), ["'none'"]);
   assert.deepEqual(csp.get('frame-ancestors'), ["'none'"]);
-  for (const [name, values] of csp) for (const v of values) assert.doesNotMatch(v, BROAD, name);
+  assert.deepEqual(csp.get('worker-src'), ['blob:']);
+  for (const [name, values] of csp) for (const v of values) if (!(name === 'worker-src' && v === 'blob:')) assert.doesNotMatch(v, BROAD, name);
   assert.equal(headers['referrer-policy'], 'no-referrer');
   assert.equal(headers['x-content-type-options'], 'nosniff');
   assert.equal(headers['x-frame-options'], 'DENY');
@@ -146,8 +149,14 @@ test('shell response headers as sent to the browser', async () => {
 });
 
 test('Permissions-Policy: every listed feature is recognised and disabled, in shell and frame', async () => {
-  const unrecognised = env.consoleMessages.filter((m) => /Permissions-Policy|Unrecognized feature/i.test(m.text));
-  assert.deepEqual(unrecognised, []);
+  // Edge ships without the Attribution Reporting API, so it does not know that
+  // feature. It stays listed because Chrome has it. Pinned exactly, so any new
+  // unrecognised entry still fails.
+  const EXPECTED_UNRECOGNISED = BROWSER === 'msedge' ? ['attribution-reporting'] : [];
+  const unrecognised = env.consoleMessages
+    .filter((m) => /Permissions-Policy|Unrecognized feature/i.test(m.text))
+    .map((m) => /Unrecognized feature: '([^']+)'/.exec(m.text)?.[1] ?? m.text);
+  assert.deepEqual(unrecognised, EXPECTED_UNRECOGNISED);
   const header = env.response.headers()['permissions-policy'];
   const features = header.split(',').map((f) => f.trim().replace(/=\(\)$/, ''));
   const shellAllowed = await env.page.evaluate(() => document.featurePolicy.allowedFeatures());

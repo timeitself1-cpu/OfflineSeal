@@ -13,8 +13,13 @@ import { startServer, PROBE_PREFIX } from '../../server/serve.mjs';
 
 export { PROBE_PREFIX };
 
+// OFFLINESEAL_BROWSER selects the browser: unset or 'chromium' for Playwright's
+// Chromium, or a Playwright channel such as 'msedge' or 'chrome' for an
+// installed branded browser.
+export const BROWSER = process.env.OFFLINESEAL_BROWSER || 'chromium';
+
 export async function launchBrowser() {
-  return chromium.launch();
+  return chromium.launch(BROWSER === 'chromium' ? {} : { channel: BROWSER });
 }
 
 export async function startApp(options = {}) {
@@ -211,3 +216,96 @@ export async function decodeInCleanPage(context, buffer, samplePoints = []) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// --- Worker instrumentation (tests only) ------------------------------------------
+// Installed in the sealed frame only (window !== top), before the frame's own
+// script runs. It wraps the frame realm's Worker constructor to log each
+// Worker's creation, termination and message types, and offers a gate that
+// holds a job's 'process-image' request so a test can inspect the live Worker
+// first. It also counts every image-processing or byte-reading API the frame's
+// own code calls.
+export const FRAME_INSTRUMENTATION = `(() => {
+  if (window === window.top) return;
+  const audit = { workers: [], calls: {}, contexts: [] };
+  const gate = { hold: false, held: [] };
+  Object.defineProperty(window, '__workerAudit', { value: audit });
+  Object.defineProperty(window, '__workerGate', { value: gate });
+
+  const Native = window.Worker;
+  function InstrumentedWorker(url, options) {
+    const worker = new Native(url, options);
+    const rec = { name: options && options.name, created: performance.now(), terminated: null, requests: [], responses: [], job: null };
+    audit.workers.push(rec);
+    const post = worker.postMessage.bind(worker);
+    worker.postMessage = (msg, transfer) => {
+      rec.requests.push(msg && msg.type);
+      if (msg && msg.job) rec.job = msg.job;
+      if (gate.hold && msg && msg.type === 'process-image') { gate.held.push(() => post(msg, transfer)); return; }
+      return post(msg, transfer);
+    };
+    const terminate = worker.terminate.bind(worker);
+    worker.terminate = () => { if (rec.terminated === null) rec.terminated = performance.now(); return terminate(); };
+    worker.addEventListener('message', (e) => rec.responses.push(e.data && e.data.type));
+    return worker;
+  }
+  InstrumentedWorker.prototype = Native.prototype;
+  window.Worker = InstrumentedWorker;
+
+  const count = (target, name, key) => {
+    const original = target && target[name];
+    if (typeof original !== 'function') return;
+    audit.calls[key] = 0;
+    target[name] = function (...args) { audit.calls[key] += 1; return original.apply(this, args); };
+  };
+  count(window, 'createImageBitmap', 'createImageBitmap');
+  for (const m of ['toBlob', 'toDataURL']) count(HTMLCanvasElement.prototype, m, 'canvas.' + m);
+  for (const m of ['drawImage', 'getImageData', 'putImageData']) count(CanvasRenderingContext2D.prototype, m, 'ctx2d.' + m);
+  for (const m of ['convertToBlob', 'getContext']) count(OffscreenCanvas.prototype, m, 'offscreen.' + m);
+  for (const m of ['arrayBuffer', 'text', 'stream', 'bytes', 'slice']) count(Blob.prototype, m, 'blob.' + m);
+  for (const m of ['readAsArrayBuffer', 'readAsBinaryString', 'readAsDataURL', 'readAsText']) count(FileReader.prototype, m, 'fileReader.' + m);
+  for (const m of ['arrayBuffer', 'blob', 'text', 'bytes']) count(Response.prototype, m, 'response.' + m);
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, ...rest) { audit.contexts.push(type); return getContext.call(this, type, ...rest); };
+})();`;
+
+// Browser-level Worker timeline, from Playwright's own Worker events.
+export function trackWorkers(page) {
+  const events = [];
+  const workers = [];
+  page.on('worker', (w) => {
+    const rec = { worker: w, created: Date.now(), closed: null };
+    workers.push(rec);
+    events.push(['created', workers.length - 1]);
+    w.on('close', () => {
+      rec.closed = Date.now();
+      events.push(['closed', workers.indexOf(rec)]);
+    });
+  });
+  return { events, workers };
+}
+
+export const frameAudit = (frame) => frame.evaluate(() => JSON.parse(JSON.stringify(window.__workerAudit)));
+export const setHold = (frame, hold) => frame.evaluate((h) => { window.__workerGate.hold = h; }, hold);
+export const release = (frame) =>
+  frame.evaluate(() => {
+    const g = window.__workerGate;
+    g.hold = false;
+    for (const send of g.held.splice(0)) send();
+  });
+
+export async function nextWorker(track, count, timeout = 10_000) {
+  const deadline = Date.now() + timeout;
+  while (track.workers.length < count) {
+    if (Date.now() > deadline) throw new Error(`expected ${count} workers, saw ${track.workers.length}`);
+    await sleep(20);
+  }
+  return track.workers[count - 1];
+}
+
+export async function allClosed(track, timeout = 10_000) {
+  const deadline = Date.now() + timeout;
+  while (track.workers.some((w) => w.closed === null)) {
+    if (Date.now() > deadline) throw new Error('a Worker is still alive');
+    await sleep(20);
+  }
+}
