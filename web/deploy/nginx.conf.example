@@ -1,0 +1,65 @@
+# Example nginx server for OfflineSeal Web.
+#
+#   npm run build
+#   rsync -a --delete web/dist/ /srv/offlineseal/
+#   cp web/dist/nginx-security-headers.conf /etc/nginx/offlineseal-security-headers.conf
+#
+# Re-copy the headers snippet on every build: its CSP contains hashes of the tool code.
+
+server {
+    # nginx >= 1.25.1 prefers `listen 443 ssl;` plus `http2 on;`. This form also
+    # works on older releases (e.g. 1.24 in Ubuntu 24.04).
+    listen 443 ssl http2;
+    server_name offlineseal.app;
+
+    ssl_certificate     /etc/letsencrypt/live/offlineseal.app/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/offlineseal.app/privkey.pem;
+
+    root /srv/offlineseal;
+    index index.html;
+    charset utf-8;
+
+    # No access log of query strings is needed: the site has no API. Keep
+    # logging minimal.
+    access_log off;
+
+    types {
+        text/html              html;
+        text/javascript        js;
+        text/css               css;
+        image/svg+xml          svg;
+        text/plain             txt;
+    }
+    default_type application/octet-stream;
+
+    # Build outputs that configure the host; not part of the site.
+    location ~ ^/(headers\.json|build-info\.json|nginx-security-headers\.conf|_headers)$ {
+        return 404;
+    }
+
+    location /assets/ {
+        include /etc/nginx/offlineseal-security-headers.conf;
+        add_header Cache-Control "public, max-age=300" always;
+        try_files $uri =404;
+    }
+
+    location / {
+        include /etc/nginx/offlineseal-security-headers.conf;
+        # Clean URLs: /image -> image.html
+        try_files $uri $uri.html $uri/ =404;
+    }
+
+    error_page 404 /404-plain;
+    location = /404-plain {
+        internal;
+        include /etc/nginx/offlineseal-security-headers.conf;
+        default_type text/plain;
+        return 404 "Not found\n";
+    }
+}
+
+server {
+    listen 80;
+    server_name offlineseal.app;
+    return 301 https://$host$request_uri;
+}

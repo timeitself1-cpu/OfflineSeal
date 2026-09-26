@@ -1,0 +1,55 @@
+{
+  "note": "Captured by web/scripts/capture-evidence.mjs in headless Chromium. \"processing\" starts when the shell shows READY and covers choosing a 1600x1067 PNG, converting to WebP at 50%, and downloading the result.",
+  "browser": "Chromium 141.0.7390.37",
+  "download": {
+    "suggestedFilename": "lake-at-dusk.webp"
+  },
+  "browserRequests": {
+    "load": [
+      {
+        "phase": "load",
+        "method": "GET",
+        "path": "/image",
+        "resourceType": "document",
+        "initiator": "shell"
+      },
+      {
+        "phase": "load",
+        "method": "GET",
+        "path": "/assets/shell.css",
+        "resourceType": "stylesheet",
+        "initiator": "shell"
+      },
+      {
+        "phase": "load",
+        "method": "GET",
+        "path": "/assets/app.js",
+        "resourceType": "script",
+        "initiator": "shell"
+      },
+      {
+        "phase": "load",
+        "method": "GET",
+        "path": "/assets/protocol.js",
+        "resourceType": "script",
+        "initiator": "shell"
+      },
+      {
+        "phase": "load",
+        "method": "GET",
+        "path": "/assets/sealed-manifest.js",
+        "resourceType": "script",
+        "initiator": "shell"
+      },
+      {
+        "phase": "load",
+        "method": "GET",
+        "path": "/assets/sealed/image-converter.sealed.txt",
+        "resourceType": "fetch",
+        "initiator": "shell"
+      }
+    ],
+    "processing": []
+  },
+  "serverRequestsDuringProcessing": []
+}

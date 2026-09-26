@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{SHELL_CSP_META}}">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Image Converter · OfflineSeal Web</title>
+<meta name="description" content="Convert and resize PNG, JPEG and WebP images in your browser. The tool can have the internet, or it can have your file, never both.">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/shell.css">
+<script type="module" src="assets/app.js"></script>
+</head>
+<body data-state="loading-tool">
+<header class="topbar">
+  <a class="brand" href="./">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.5l11 4.2v8.1c0 7-4.6 12.4-11 14.7C9.6 27.2 5 21.8 5 14.8V6.7z"/><path class="brand-check" d="M11 16.2l3.4 3.4 6.8-7.2"/></svg>
+    <span>OfflineSeal</span><span class="edition">Web</span>
+  </a>
+  <div class="protection">
+    <span class="badge" id="protection-badge">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.2l5.5 2.1v4c0 3.5-2.3 6.2-5.5 7.4C4.8 13.5 2.5 10.8 2.5 7.3v-4z"/></svg>
+      Web protection · Browser enforced
+    </span>
+    <details class="info">
+      <summary aria-label="About Web protection"><span aria-hidden="true">i</span></summary>
+      <div class="popover" role="note">
+        <p><strong>How OfflineSeal Web protects your file</strong></p>
+        <p>OfflineSeal loads the processing tool first, seals its network access, and only then lets your file enter.</p>
+        <p>OfflineSeal Web uses browser security policies to prevent the processing tool from making network requests.</p>
+        <p class="muted">Need stronger OS-enforced isolation? Use <a href="https://github.com/timeitself1-cpu/OfflineSeal#offlineseal-desktop" rel="noopener noreferrer">OfflineSeal Desktop</a>.</p>
+      </div>
+    </details>
+  </div>
+</header>
+
+<main>
+  <section class="intro">
+    <h1>Image Converter</h1>
+    <p class="lede">Use web tools without uploading your private files.</p>
+    <p class="motto">The tool can have the internet, or it can have your file — never both.</p>
+  </section>
+
+  <section class="seal-status" aria-live="polite">
+    <p class="seal-heading" id="seal-heading">Preparing secure processing area…</p>
+    <ol class="checklist">
+      <li data-step="tool" data-status="active"><span class="tick" aria-hidden="true"></span>Tool loaded</li>
+      <li data-step="network" data-status="pending"><span class="tick" aria-hidden="true"></span>Network access blocked</li>
+      <li data-step="area" data-status="pending"><span class="tick" aria-hidden="true"></span>Private processing area ready</li>
+    </ol>
+  </section>
+
+  <section class="workspace" aria-label="Private processing area">
+    <div class="workspace-bar">
+      <span class="workspace-title"><span class="dot" aria-hidden="true"></span><span id="workspace-status">Sealing the processing area…</span></span>
+      <button type="button" class="ghost" id="restart" hidden>Use another image</button>
+    </div>
+    <div class="frame-host" id="frame-host">
+      <div class="frame-placeholder" id="frame-placeholder">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Preparing secure processing area…</span>
+      </div>
+    </div>
+    <p class="drop-nudge" id="drop-nudge" hidden>Drop your image inside the processing area above.</p>
+  </section>
+
+  <div class="fatal" id="fatal" role="alert" hidden>
+    <p class="fatal-title">Secure processing area unavailable</p>
+    <p id="fatal-text"></p>
+    <p class="muted">No file was accepted. Reload the page to try again.</p>
+    <button type="button" class="ghost" id="reload">Reload</button>
+  </div>
+
+  <p class="assurance">Processed locally in your browser. Your original file is never uploaded by OfflineSeal.</p>
+
+  <details class="tech" id="tech">
+    <summary>Technical details</summary>
+    <dl class="tech-list">
+      <dt>Protection level</dt>
+      <dd>OfflineSeal Web: browser-enforced. The browser's sandbox and Content Security Policy keep the processing tool off the network. It is not OS-level network isolation; that is what OfflineSeal Desktop provides.</dd>
+      <dt>Lifecycle</dt>
+      <dd>Tool downloaded → fingerprint verified → sealed frame created → frame checks its own seal → file accepted. Each new image gets a fresh frame.</dd>
+      <dt>Tool fingerprint</dt>
+      <dd><code id="tech-integrity">—</code></dd>
+      <dt>Frame sandbox (live)</dt>
+      <dd><code id="tech-sandbox">—</code></dd>
+      <dt>Frame origin (observed)</dt>
+      <dd><code id="tech-origin">—</code></dd>
+      <dt>Frame Content-Security-Policy</dt>
+      <dd><code id="tech-frame-csp">—</code></dd>
+      <dt>Page Content-Security-Policy</dt>
+      <dd><code id="tech-shell-csp">—</code><br><span class="muted">Also sent by the host as an HTTP header, which adds <code>frame-ancestors 'none'</code>. The frame is bound by both policies.</span></dd>
+      <dt>Frame instance</dt>
+      <dd><code id="tech-instance">—</code></dd>
+      <dt>Messages from frame</dt>
+      <dd><span id="tech-messages">0 accepted · 0 ignored</span><br><span class="muted">Status only. The page accepts six fixed message types and never sends anything to the frame.</span></dd>
+      <dt>Not covered by browser policy</dt>
+      <dd>WebRTC is not governed by CSP or the sandbox. The frame removes WebRTC before any other code runs, which is JavaScript-level hardening rather than a browser boundary. Browser extensions can see page content. See the project README for the full limits.</dd>
+    </dl>
+  </details>
+</main>
+
+<footer class="footer">
+  <p>Need stronger OS-enforced isolation? Use <a href="https://github.com/timeitself1-cpu/OfflineSeal#offlineseal-desktop" rel="noopener noreferrer">OfflineSeal Desktop</a>, which processes each file in a disposable container with no network.</p>
+  <p class="muted">No accounts · No analytics · No uploads</p>
+</footer>
+<noscript><p class="noscript">OfflineSeal Web needs JavaScript to run the sealed tool in your browser.</p></noscript>
+</body>
+</html>

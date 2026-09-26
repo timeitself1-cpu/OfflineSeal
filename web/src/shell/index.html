@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{SHELL_CSP_META}}">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>OfflineSeal Web</title>
+<meta name="description" content="Use web tools without uploading your private files. The tool can have the internet, or it can have your file, never both.">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/shell.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="./">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.5l11 4.2v8.1c0 7-4.6 12.4-11 14.7C9.6 27.2 5 21.8 5 14.8V6.7z"/><path class="brand-check" d="M11 16.2l3.4 3.4 6.8-7.2"/></svg>
+    <span>OfflineSeal</span><span class="edition">Web</span>
+  </a>
+  <span class="badge">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.2l5.5 2.1v4c0 3.5-2.3 6.2-5.5 7.4C4.8 13.5 2.5 10.8 2.5 7.3v-4z"/></svg>
+    Web protection · Browser enforced
+  </span>
+</header>
+<main>
+  <section class="intro">
+    <h1>Use web tools without uploading your private files.</h1>
+    <p class="lede">OfflineSeal loads the processing tool first, seals its network access, and only then lets your file enter.</p>
+    <p class="motto">The tool can have the internet, or it can have your file — never both.</p>
+  </section>
+  <nav class="tools" aria-label="Tools">
+    <a class="tool-card" href="image">
+      <h2>Image Converter →</h2>
+      <p>Convert and resize PNG, JPEG and WebP images in your browser.</p>
+    </a>
+  </nav>
+  <section class="editions" aria-label="Editions">
+    <div class="edition-card">
+      <h3>OfflineSeal Web</h3>
+      <ul>
+        <li>Open a link, nothing to install</li>
+        <li>Your file is processed locally in your browser</li>
+        <li>Browser-enforced isolation</li>
+      </ul>
+    </div>
+    <div class="edition-card">
+      <h3>OfflineSeal Desktop</h3>
+      <ul>
+        <li>Runs on your computer</li>
+        <li>A disposable, network-less container for every file</li>
+        <li>OS-enforced isolation</li>
+      </ul>
+    </div>
+  </section>
+</main>
+<footer class="footer">
+  <p>Processed locally in your browser. Your original file is never uploaded by OfflineSeal.</p>
+  <p class="muted">No accounts · No analytics · No uploads</p>
+</footer>
+</body>
+</html>
