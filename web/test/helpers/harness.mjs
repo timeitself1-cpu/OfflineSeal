@@ -179,22 +179,35 @@ export async function chooseImage(env, buffer, name = 'synthetic-test-image.png'
   await env.frame.setInputFiles('#file', { name, mimeType: 'image/png', buffer });
 }
 
-export async function convertTo(env, type) {
-  await env.frame.check(`#formats input[value="${type}"]`);
-  await env.frame.click('#convert');
+// Generic runtime selectors (the frame renders every tool's controls the same way).
+export const sel = {
+  choice: (id, value) => `[data-control="${id}"] input[name="control-${id}"][value="${value}"]`,
+  action: '#action',
+  output: (i = 0) => `#outputs a[data-output="${i}"]`,
+};
+
+export async function selectChoice(env, id, value) {
+  await env.frame.check(sel.choice(id, value));
+}
+
+export async function runTool(env) {
+  await env.frame.click(sel.action);
   await waitForShellState(env.page, 'complete');
 }
 
-export async function downloadResult(env) {
-  const [download] = await Promise.all([env.page.waitForEvent('download'), env.frame.click('#download')]);
+export async function convertTo(env, type) {
+  await selectChoice(env, 'format', type);
+  await runTool(env);
+}
+
+export async function downloadResult(env, index = 0) {
+  const [download] = await Promise.all([env.page.waitForEvent('download'), env.frame.click(sel.output(index))]);
   const dir = await mkdtemp(join(tmpdir(), 'offlineseal-dl-'));
   const path = join(dir, download.suggestedFilename());
   await download.saveAs(path);
   return { download, path, name: download.suggestedFilename() };
 }
 
-// Decode bytes in a separate, ordinary page (no OfflineSeal code involved).
-// Checks that an output is a real, decodable image.
 export async function decodeInCleanPage(context, buffer, samplePoints = []) {
   const page = await context.newPage();
   try {
@@ -221,7 +234,7 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Installed in the sealed frame only (window !== top), before the frame's own
 // script runs. It wraps the frame realm's Worker constructor to log each
 // Worker's creation, termination and message types, and offers a gate that
-// holds a job's 'process-image' request so a test can inspect the live Worker
+// holds a job's 'process' request so a test can inspect the live Worker
 // first. It also counts every image-processing or byte-reading API the frame's
 // own code calls.
 export const FRAME_INSTRUMENTATION = `(() => {
@@ -240,7 +253,7 @@ export const FRAME_INSTRUMENTATION = `(() => {
     worker.postMessage = (msg, transfer) => {
       rec.requests.push(msg && msg.type);
       if (msg && msg.job) rec.job = msg.job;
-      if (gate.hold && msg && msg.type === 'process-image') { gate.held.push(() => post(msg, transfer)); return; }
+      if (gate.hold && msg && msg.type === 'process') { gate.held.push(() => post(msg, transfer)); return; }
       return post(msg, transfer);
     };
     const terminate = worker.terminate.bind(worker);

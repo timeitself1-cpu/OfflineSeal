@@ -1,23 +1,16 @@
-// Pure image-converter logic. No DOM and no network: just numbers, bytes and
-// strings. The build inlines this file into the sealed frame's single
-// hash-pinned script. The unit tests load it with node:vm.
-//
-// Written as a classic script that defines one binding (SealedCore), so the build
-// can inline it unchanged and the tests can evaluate it without a bundler.
+// Image Converter tool: pure helpers (format sniffing, encoder table, resize
+// steps, names). No DOM and no network. The build inlines this file into the
+// Image Converter's Worker code only; the trusted frame never contains it.
+// The unit tests load it with node:vm.
 
 // eslint-disable-next-line no-unused-vars
-const SealedCore = (() => {
+const ImageCore = (() => {
   'use strict';
 
   const LIMITS = Object.freeze({
-    // Anything larger is almost certainly not a single image a person means to convert
-    // here, and decoding it could exhaust the tab's memory.
-    maxInputBytes: 100 * 1024 * 1024,
-    // Decoded pixel budget for the source image (about 100 megapixels).
+    // Decoded pixel budget for the source image (about 100 megapixels). The
+    // file-size and output-size limits live in the manifest.
     maxInputPixels: 100_000_000,
-    // Canvas limits vary by browser. These stay well inside all current desktop engines.
-    maxOutputDimension: 16_384,
-    maxOutputPixels: 64_000_000,
   });
 
   // Output encoders. Every current desktop browser can encode PNG and JPEG.
@@ -37,7 +30,6 @@ const SealedCore = (() => {
     'image/avif': 'AVIF',
   });
 
-  const ACCEPT_ATTRIBUTE = Object.keys(INPUT_LABELS).join(',') + ',.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif';
 
   const startsWith = (bytes, sig, offset = 0) =>
     bytes.length >= offset + sig.length && sig.every((b, i) => bytes[offset + i] === b);
@@ -65,32 +57,6 @@ const SealedCore = (() => {
     return supported[0] || null;
   }
 
-  const clampInt = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(n)));
-
-  // Work out the output size from what the user typed. Always returns whole
-  // pixels within the output limits, keeping the aspect ratio if asked.
-  function fitSize({ sourceWidth, sourceHeight, width, height, keepAspect, changed }) {
-    const sw = Math.max(1, sourceWidth | 0);
-    const sh = Math.max(1, sourceHeight | 0);
-    let w = Number.isFinite(width) && width > 0 ? width : sw;
-    let h = Number.isFinite(height) && height > 0 ? height : sh;
-    if (keepAspect) {
-      if (changed === 'height') w = (h * sw) / sh;
-      else h = (w * sh) / sw;
-    }
-    const max = LIMITS.maxOutputDimension;
-    // Scale down uniformly if a side exceeds the dimension limit or the area exceeds
-    // the pixel budget, so the aspect ratio is preserved when clamping.
-    let scale = Math.min(1, max / w, max / h);
-    const area = w * scale * (h * scale);
-    if (area > LIMITS.maxOutputPixels) scale *= Math.sqrt(LIMITS.maxOutputPixels / area);
-    return { width: clampInt(w * scale, 1, max), height: clampInt(h * scale, 1, max) };
-  }
-
-  function scaleSize(sourceWidth, sourceHeight, percent) {
-    const p = Math.max(1, Math.min(100, percent)) / 100;
-    return fitSize({ sourceWidth, sourceHeight, width: sourceWidth * p, keepAspect: true, changed: 'width' });
-  }
 
   // Large reductions look noticeably better when done in steps of at most 2x.
   // Returns the list of intermediate sizes ending with the target.
@@ -148,11 +114,8 @@ const SealedCore = (() => {
     LIMITS,
     OUTPUT_TYPES,
     INPUT_LABELS,
-    ACCEPT_ATTRIBUTE,
     sniffImageType,
     defaultOutputType,
-    fitSize,
-    scaleSize,
     downscaleSteps,
     outputFileName,
     formatBytes,

@@ -10,7 +10,11 @@
 //     its own origin, before any file can be chosen.
 
 import { validateFrameMessage, nextState } from './protocol.js';
-import { SEALED_TOOL } from './sealed-manifest.js';
+import { SEALED_RUNTIME, SEALED_TOOLS } from './sealed-manifest.js';
+
+// Which tool this page hosts: set by the build in <meta name="offlineseal-tool">.
+const TOOL_ID = document.querySelector('meta[name="offlineseal-tool"]')?.content ?? '';
+const TOOL = Object.hasOwn(SEALED_TOOLS, TOOL_ID) ? SEALED_TOOLS[TOOL_ID] : null;
 
 const READY_TIMEOUT_MS = 10_000;
 
@@ -32,17 +36,19 @@ const ui = {
     shellCsp: $('tech-shell-csp'),
     instance: $('tech-instance'),
     messages: $('tech-messages'),
+    tool: $('tech-tool'),
+    runtime: $('tech-runtime'),
   },
 };
 
 const STATE_TEXT = {
   'loading-tool': ['Preparing secure processing area…', 'Downloading the tool…'],
   sealing: ['Preparing secure processing area…', 'Sealing the processing area…'],
-  ready: ['Ready for your file', 'Sealed · ready for your image'],
-  'file-selected': ['Your image is in the sealed area', 'Sealed · your image is inside'],
-  processing: ['Converting on this device…', 'Sealed · converting'],
-  complete: ['Your converted image is ready', 'Sealed · result ready to download'],
-  failed: ['That conversion did not work', 'Sealed · try other settings'],
+  ready: ['Ready for your file', 'Sealed · ready for your files'],
+  'file-selected': ['Your files are in the sealed area', 'Sealed · your files are inside'],
+  processing: ['Working on this device…', 'Sealed · processing'],
+  complete: ['Your result is ready', 'Sealed · result ready to download'],
+  failed: ['That did not work', 'Sealed · try other settings'],
   fatal: ['Secure processing area unavailable', 'Closed'],
 };
 
@@ -57,7 +63,7 @@ const counters = { accepted: 0, ignored: 0 };
 // produced by this named policy. The policy accepts exactly one string: the
 // verified payload for the frame being created at that moment.
 const frameHtmlPolicy = window.trustedTypes
-  ? window.trustedTypes.createPolicy(SEALED_TOOL.trustedTypesPolicy, {
+  ? window.trustedTypes.createPolicy(SEALED_RUNTIME.trustedTypesPolicy, {
       createHTML(html) {
         if (pendingFrameHtml === null || html !== pendingFrameHtml) {
           throw new TypeError('OfflineSeal: refusing HTML that is not the verified tool payload');
@@ -71,12 +77,13 @@ const frameHtmlPolicy = window.trustedTypes
 
 async function loadTool() {
   setStep('tool', 'active');
+  if (!TOOL) return fatal('This page does not name a known tool.', 'tool');
   let text;
   try {
     // The browser checks the downloaded bytes against the pinned SHA-384
     // (Subresource Integrity). A tool that does not match is never used.
-    const response = await fetch(new URL(SEALED_TOOL.path, import.meta.url), {
-      integrity: SEALED_TOOL.integrity,
+    const response = await fetch(new URL(TOOL.path, import.meta.url), {
+      integrity: TOOL.integrity,
       credentials: 'omit',
       mode: 'same-origin',
       redirect: 'error',
@@ -88,11 +95,13 @@ async function loadTool() {
   } catch {
     return fatal('The tool could not be downloaded, or it did not match its pinned fingerprint.', 'tool');
   }
-  if (text.split(SEALED_TOOL.instancePlaceholder).length !== 2) {
+  if (text.split(SEALED_RUNTIME.instancePlaceholder).length !== 2) {
     return fatal('The tool payload has an unexpected structure.', 'tool');
   }
   payload = text;
-  ui.tech.integrity.textContent = SEALED_TOOL.integrity;
+  ui.tech.integrity.textContent = TOOL.integrity;
+  ui.tech.tool.textContent = `${TOOL.name} ${TOOL.version}`;
+  ui.tech.runtime.textContent = SEALED_RUNTIME.runtimeScriptHash;
   ui.tech.frameCsp.textContent = extractFrameCsp(payload) ?? '(missing)';
   setStep('tool', 'done');
   createFrame();
@@ -101,13 +110,13 @@ async function loadTool() {
 function createFrame() {
   destroyFrame();
   const instance = randomId();
-  const html = payload.replace(SEALED_TOOL.instancePlaceholder, instance);
+  const html = payload.replace(SEALED_RUNTIME.instancePlaceholder, instance);
 
   const iframe = document.createElement('iframe');
   // Order matters: a frame's sandbox flags are fixed when its document is
   // created. So they are set before srcdoc is assigned and before the iframe is
   // attached to the page. Otherwise the first document could load unsandboxed.
-  iframe.setAttribute('sandbox', SEALED_TOOL.sandbox.join(' '));
+  iframe.setAttribute('sandbox', SEALED_RUNTIME.sandbox.join(' '));
   iframe.setAttribute('referrerpolicy', 'no-referrer');
   iframe.setAttribute('title', 'Private processing area');
   // Belt and braces: until the frame reports that its seal checks passed, the
@@ -261,7 +270,7 @@ function updateCounters() {
 
 function sandboxIsExact(iframe) {
   const live = [...iframe.sandbox].sort().join(' ');
-  return live === [...SEALED_TOOL.sandbox].sort().join(' ') && iframe.hasAttribute('sandbox');
+  return live === [...SEALED_RUNTIME.sandbox].sort().join(' ') && iframe.hasAttribute('sandbox');
 }
 
 function extractFrameCsp(html) {

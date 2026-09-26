@@ -13,6 +13,7 @@
 export const PROTOCOL_ID = 'offlineseal.web.v1';
 
 export const SEAL_FAILURE_CODES = Object.freeze([
+  'manifest-invalid',
   'not-framed',
   'not-opaque-origin',
   'parent-reachable',
@@ -23,11 +24,11 @@ export const SEAL_FAILURE_CODES = Object.freeze([
 ]);
 
 export const PROCESSING_FAILURE_CODES = Object.freeze([
-  'decode-failed',
-  'encode-failed',
-  'output-type-unsupported',
-  'output-verification-failed',
   'too-large',
+  'unsupported-input',
+  'invalid-input',
+  'tool-failed',
+  'output-rejected',
   'worker-failed',
 ]);
 

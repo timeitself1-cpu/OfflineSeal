@@ -1,0 +1,75 @@
+{
+  "manifest": "offlineseal.tool.v1",
+  "id": "image-converter",
+  "version": "1.1.0",
+  "name": "Image Converter",
+  "shell": {
+    "path": "image",
+    "title": "Image Converter",
+    "lede": "Use web tools without uploading your private files.",
+    "restartLabel": "Use another image"
+  },
+  "input": {
+    "accept": ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp", "image/avif"],
+    "extensions": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"],
+    "minFiles": 1,
+    "maxFiles": 1,
+    "maxBytesPerFile": 104857600,
+    "maxTotalBytes": 104857600,
+    "dropTitle": "Drop image here",
+    "dropSubtitle": "PNG, JPEG, WebP, GIF, BMP or AVIF · stays on this device",
+    "chooseLabel": "Choose image"
+  },
+  "outputs": {
+    "types": [
+      { "type": "image/jpeg", "label": "JPEG" },
+      { "type": "image/png", "label": "PNG" },
+      { "type": "image/webp", "label": "WebP" }
+    ],
+    "maxFiles": 1
+  },
+  "controls": [
+    {
+      "type": "choice",
+      "id": "format",
+      "label": "Convert to",
+      "options": [
+        { "value": "image/jpeg", "label": "JPEG" },
+        { "value": "image/png", "label": "PNG" },
+        { "value": "image/webp", "label": "WebP" }
+      ],
+      "default": "image/jpeg",
+      "capability": true
+    },
+    {
+      "type": "hint",
+      "id": "jpeg-hint",
+      "text": "Transparent areas become white in JPEG.",
+      "showWhen": { "control": "format", "in": ["image/jpeg"] }
+    },
+    {
+      "type": "range",
+      "id": "quality",
+      "label": "Quality",
+      "min": 10,
+      "max": 100,
+      "step": 1,
+      "default": 85,
+      "unit": "%",
+      "showWhen": { "control": "format", "in": ["image/jpeg", "image/webp"] }
+    },
+    {
+      "type": "dimensions",
+      "id": "size",
+      "label": "Size",
+      "unit": "pixels",
+      "lockLabel": "Keep proportions",
+      "presets": [100, 75, 50, 25],
+      "maxDimension": 16384,
+      "maxArea": 64000000
+    }
+  ],
+  "action": { "label": "Convert" },
+  "limits": { "inspectTimeoutMs": 60000, "runTimeoutMs": 120000 },
+  "notes": ["Metadata such as camera details and location is not copied to the converted image."]
+}

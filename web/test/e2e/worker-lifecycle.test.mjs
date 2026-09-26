@@ -64,14 +64,14 @@ test('one fresh Worker per job, each terminated when its job ends, never two ali
 
   const audit = await frameAudit(env.frame);
   const names = audit.workers.map((w) => w.name);
-  assert.deepEqual(names.filter((n) => n !== 'offlineseal-self-check'), ['offlineseal-inspect', 'offlineseal-convert', 'offlineseal-convert']);
+  assert.deepEqual(names.filter((n) => n !== 'offlineseal-self-check'), ['offlineseal-inspect', 'offlineseal-run', 'offlineseal-run']);
   // In Chromium the instrumentation is in place before the frame's script, so
   // it must also see the READY self-check. In Edge the instrumentation starts
   // later and can miss it (measured; see lifecycle.test.mjs).
   if (BROWSER === 'chromium') assert.equal(names[0], 'offlineseal-self-check');
   for (const w of audit.workers) {
     assert.notEqual(w.terminated, null, `${w.name} was not terminated`);
-    assert.equal(w.requests.filter((t) => t === 'process-image' || t === 'self-check').length, 1, 'exactly one job per Worker');
+    assert.equal(w.requests.filter((t) => t === 'process' || t === 'self-check').length, 1, 'exactly one job per Worker');
     assert.equal(w.requests.at(-1), 'destroy');
   }
   // Each Worker was terminated before the next one was created.
@@ -151,16 +151,16 @@ test('within one file, a second conversion cannot see the first conversion\'s Wo
   await chooseImage(env, syntheticPng({ width: 100, height: 80 }));
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
-  await env.frame.click('#convert');
-  const first = await workerNamed(env.track, 'offlineseal-convert');
+  await env.frame.click('#action');
+  const first = await workerNamed(env.track, 'offlineseal-run');
   await first.worker.evaluate(() => { self.__plantedByTest = 'conversion 1'; });
   await release(env.frame);
   await waitForShellState(env.page, 'complete');
 
   await setHold(env.frame, true);
-  await env.frame.check('#formats input[value="image/png"]');
-  await env.frame.click('#convert');
-  const second = await workerNamed(env.track, 'offlineseal-convert', { exclude: [first] });
+  await env.frame.check('[data-control="format"] input[value="image/png"]');
+  await env.frame.click('#action');
+  const second = await workerNamed(env.track, 'offlineseal-run', { exclude: [first] });
   assert.notEqual(second.worker, first.worker);
   assert.notEqual(first.closed, null, 'first conversion Worker already closed');
   assert.equal(await second.worker.evaluate(() => typeof self.__plantedByTest), 'undefined');
@@ -173,7 +173,7 @@ test('the sealed frame never decodes, resizes, encodes or reads bytes itself', a
   const env = await open();
   await chooseImage(env, syntheticPng({ width: 400, height: 300, alpha: true }));
   await waitForShellState(env.page, 'file-selected');
-  await env.frame.click('#scales button[data-scale="50"]');
+  await env.frame.click('[data-control="size"] button[data-scale="50"]');
   await convertTo(env, 'image/jpeg');
   await downloadResult(env);
   await convertTo(env, 'image/webp');
@@ -194,8 +194,8 @@ test('selecting another image mid-conversion terminates the running Worker', asy
   await chooseImage(env, syntheticPng({ width: 300, height: 200 }));
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
-  await env.frame.click('#convert');
-  const running = await workerNamed(env.track, 'offlineseal-convert');
+  await env.frame.click('#action');
+  const running = await workerNamed(env.track, 'offlineseal-run');
   await waitForShellState(env.page, 'processing');
   assert.equal(running.closed, null, 'conversion Worker is alive');
 
@@ -219,8 +219,8 @@ test('unknown and malformed Worker messages are ignored; the job still completes
   await chooseImage(env, syntheticPng({ width: 160, height: 120 }));
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
-  await env.frame.click('#convert');
-  const live = await workerNamed(env.track, 'offlineseal-convert');
+  await env.frame.click('#action');
+  const live = await workerNamed(env.track, 'offlineseal-run');
   const job = (await frameAudit(env.frame)).workers.at(-1).job;
   const appLogStart = app.log.length;
   const warningsBefore = env.consoleMessages.filter((m) => m.text.includes('Ignored worker message')).length;
@@ -228,17 +228,18 @@ test('unknown and malformed Worker messages are ignored; the job still completes
   // Worker -> frame: hostile or malformed messages from the live Worker.
   const sent = await live.worker.evaluate(
     ({ job, target }) => {
-      const P = 'offlineseal.worker.v1';
+      const P = 'offlineseal.worker.v2';
       const messages = [
         { protocol: P, type: 'fetch-url', job, url: `${target}/w-fetch-url` },
         { protocol: P, type: 'proxy-request', job, endpoint: `${target}/w-proxy`, request: { method: 'POST' } },
         { protocol: P, type: 'run-script', job, payload: `fetch('${target}/w-run')` },
         { protocol: P, type: 'eval', job, payload: '1+1' },
         { protocol: P, type: 'open-url', job, url: `${target}/w-open` },
-        { protocol: P, type: 'processing-complete', job: 'f'.repeat(32), operation: 'convert' },
-        { protocol: P, type: 'processing-complete', job, operation: 'convert', info: { type: 'image/png', width: 1, height: 1, size: 3 }, output: 'not a blob', preview: null, url: `${target}/w-extra` },
-        { protocol: P, type: 'processing-failed', job, code: `${target}/w-code` },
-        { protocol: P, type: 'self-check-passed', job, encoders: ['image/png'] },
+        { protocol: P, type: 'processing-complete', job: 'f'.repeat(32), operation: 'run', result: {} },
+        { protocol: 'offlineseal.worker.v1', type: 'processing-complete', job, operation: 'run', result: {} },
+        { protocol: P, type: 'processing-failed', job, code: `${target}/w-code`, message: '' },
+        { protocol: P, type: 'processing-failed', job, code: 'tool-failed', message: 'x', url: `${target}/w-extra` },
+        { protocol: P, type: 'self-check-passed', job, capabilities: { options: {} } },
         { type: 'processing-complete', job },
         `fetch ${target}/w-string`,
         [job, 'processing-complete'],
@@ -250,11 +251,11 @@ test('unknown and malformed Worker messages are ignored; the job still completes
   );
   // Frame -> worker: hostile requests delivered straight to the Worker's own handler.
   await live.worker.evaluate((target) => {
-    const P = 'offlineseal.worker.v1';
+    const P = 'offlineseal.worker.v2';
     for (const data of [
       { protocol: P, type: 'fetch-url', url: `${target}/wr-fetch` },
       { protocol: P, type: 'run-script', payload: `fetch('${target}/wr-run')` },
-      { protocol: P, type: 'process-image', job: 'a'.repeat(32), operation: 'convert', file: 'not a file', previewMax: { width: 1, height: 1 } },
+      { protocol: P, type: 'process', job: 'a'.repeat(32), operation: 'run', files: ['not a file'], params: {}, previewMax: { width: 1, height: 1 } },
       { protocol: P, type: 'cancel', job: 'b'.repeat(32), url: `${target}/wr-cancel` },
     ]) {
       self.dispatchEvent(new MessageEvent('message', { data }));
@@ -278,6 +279,29 @@ test('unknown and malformed Worker messages are ignored; the job still completes
   await env.context.close();
 });
 
+test('a malformed result for the current job ends the job at once (output rejected)', async () => {
+  const env = await open();
+  await chooseImage(env, syntheticPng({ width: 160, height: 120 }));
+  await waitForShellState(env.page, 'file-selected');
+  await setHold(env.frame, true);
+  await env.frame.click('#action');
+  const live = await workerNamed(env.track, 'offlineseal-run');
+  const job = (await frameAudit(env.frame)).workers.at(-1).job;
+  // A result for the right job whose output is not a Blob, with an extra field.
+  await live.worker.evaluate((job) => {
+    postMessage({ protocol: 'offlineseal.worker.v2', type: 'processing-complete', job, operation: 'run', result: { summary: [], outputs: [{ file: 'bytes', name: 'x.jpg', summary: '' }] } });
+  }, job);
+  await waitForShellState(env.page, 'failed');
+  const deadline = Date.now() + 5000;
+  while (live.closed === null && Date.now() < deadline) await sleep(20);
+  assert.notEqual(live.closed, null, 'the Worker was terminated');
+  const strings = (await env.page.evaluate(() => window.__offlinesealAudit)).messages.flatMap((m) => m.strings);
+  assert.ok(strings.includes('output-rejected'));
+  assert.equal(await env.frame.locator('#outputs a').count(), 0, 'nothing offered for download');
+  await release(env.frame);
+  await env.context.close();
+});
+
 test('Worker failures fail cleanly: decode error and crash, with nothing leaked to the shell', async () => {
   const env = await open();
   // 1. A file that looks like a PNG but cannot be decoded.
@@ -294,8 +318,8 @@ test('Worker failures fail cleanly: decode error and crash, with nothing leaked 
   await chooseImage(env, syntheticPng({ width: 200, height: 100 }));
   await waitForShellState(env.page, 'file-selected');
   await setHold(env.frame, true);
-  await env.frame.click('#convert');
-  const doomed = await workerNamed(env.track, 'offlineseal-convert');
+  await env.frame.click('#action');
+  const doomed = await workerNamed(env.track, 'offlineseal-run');
   await doomed.worker.evaluate(() => {
     setTimeout(() => {
       throw new Error('simulated worker crash');

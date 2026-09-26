@@ -1,15 +1,17 @@
-// Runs the real, built Worker script in a fake Worker global (node:vm) to
-// check its message handling and fail-closed behaviour deterministically.
+// Runs a real, built tool Worker script (the Image Converter's) in a fake
+// Worker global (node:vm), to check the runtime Worker host deterministically:
+// message handling, one job per Worker, and failing closed.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import { join } from 'node:path';
 
-import { buildSealedPayload } from '../../build.mjs';
+import { buildTool, TOOLS_DIR } from '../../build.mjs';
 
-const { workerScript } = await buildSealedPayload();
+const { workerScript } = await buildTool(join(TOOLS_DIR, 'image-converter'));
 const JOB = 'e'.repeat(32);
-const ID = 'offlineseal.worker.v1';
+const ID = 'offlineseal.worker.v2';
 
 // A fake DedicatedWorkerGlobalScope. `sealed` controls whether fetch of the
 // data: URL is refused with a connect-src violation (the real, sealed
@@ -19,33 +21,32 @@ function fakeWorker({ sealed = true } = {}) {
   const posted = [];
   const reads = { slice: 0, arrayBuffer: 0 };
   class File {
-    constructor() {
-      this.size = 10;
+    constructor(name = 'x.png', size = 10) {
+      this.name = name;
+      this.size = size;
     }
     slice() {
       reads.slice += 1;
       return { arrayBuffer: async () => { reads.arrayBuffer += 1; return new ArrayBuffer(32); } };
     }
+    async arrayBuffer() {
+      reads.arrayBuffer += 1;
+      return new ArrayBuffer(32);
+    }
   }
+  class Blob {}
+  class ImageBitmap {}
   const g = {
     origin: 'null',
     File,
+    Blob,
+    ImageBitmap,
     closed: false,
-    posted,
-    reads,
     setTimeout,
     clearTimeout,
+    queueMicrotask,
     Uint8Array,
     ArrayBuffer,
-    Math,
-    Object,
-    Array,
-    Set,
-    Number,
-    String,
-    Error,
-    TypeError,
-    Promise,
     indexedDB: { open() { throw Object.assign(new Error('opaque origin'), { name: 'SecurityError' }); } },
     addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
     removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter((f) => f !== fn); },
@@ -68,6 +69,7 @@ function fakeWorker({ sealed = true } = {}) {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 50));
+const inspect = (g, job = JOB) => ({ protocol: ID, type: 'process', job, operation: 'inspect', files: [new g.File()], params: null, previewMax: { width: 10, height: 10 } });
 
 test('unknown and malformed requests get no reply and change nothing', async () => {
   const { g, send, posted } = fakeWorker();
@@ -75,8 +77,9 @@ test('unknown and malformed requests get no reply and change nothing', async () 
     { protocol: ID, type: 'fetch-url', url: 'https://example.invalid/' },
     { protocol: ID, type: 'run-script', payload: 'x' },
     { protocol: ID, type: 'eval', payload: '1' },
-    { protocol: ID, type: 'process-image', job: JOB, operation: 'inspect', file: 'bytes', previewMax: { width: 1, height: 1 } },
-    { protocol: 'other', type: 'destroy' },
+    { ...inspect(g), files: ['bytes'] },
+    { ...inspect(g), operation: 'run', params: { format: 'text/html' } },
+    { protocol: 'offlineseal.worker.v1', type: 'destroy' },
     { protocol: ID, type: 'destroy', url: 'x' },
     'destroy',
     null,
@@ -98,19 +101,18 @@ test('destroy closes the Worker; cancel only for its own job', async () => {
 
 test('a Worker takes exactly one job', async () => {
   const { send, posted, g } = fakeWorker();
-  const file = new g.File();
-  send({ protocol: ID, type: 'process-image', job: JOB, operation: 'inspect', file, previewMax: { width: 10, height: 10 } });
-  send({ protocol: ID, type: 'process-image', job: 'f'.repeat(32), operation: 'inspect', file, previewMax: { width: 10, height: 10 } });
+  send(inspect(g));
+  send(inspect(g, 'f'.repeat(32)));
   send({ protocol: ID, type: 'self-check', job: 'a'.repeat(32) });
   await settle();
-  assert.deepEqual(new Set(posted.map((m) => m.job)), new Set([JOB]), 'only the first job was served');
+  assert.deepEqual([...new Set(posted.map((m) => m.job))], [JOB], 'only the first job was served');
   assert.equal(posted[0].type, 'processing-started');
   assert.equal(posted.at(-1).type, 'processing-failed', 'this fake cannot decode, so the job fails cleanly');
 });
 
-test('a Worker whose network seal cannot be verified refuses to read the file', async () => {
+test('a Worker whose network seal cannot be verified refuses to read the files', async () => {
   const { send, posted, reads, g } = fakeWorker({ sealed: false });
-  send({ protocol: ID, type: 'process-image', job: JOB, operation: 'inspect', file: new g.File(), previewMax: { width: 10, height: 10 } });
+  send(inspect(g));
   await settle();
   assert.deepEqual(posted.map((m) => [m.type, m.code]), [['processing-started', undefined], ['processing-failed', 'worker-seal-failed']]);
   assert.deepEqual(reads, { slice: 0, arrayBuffer: 0 }, 'not a single byte was read');
@@ -125,7 +127,7 @@ test('self-check fails closed when the seal cannot be verified', async () => {
 
 test('every reply uses the Worker protocol and names the job', async () => {
   const { send, posted, g } = fakeWorker();
-  send({ protocol: ID, type: 'process-image', job: JOB, operation: 'inspect', file: new g.File(), previewMax: { width: 10, height: 10 } });
+  send(inspect(g));
   await settle();
   assert.ok(posted.length >= 2);
   for (const m of posted) {

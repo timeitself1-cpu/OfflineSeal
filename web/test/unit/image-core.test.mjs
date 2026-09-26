@@ -5,10 +5,10 @@ import vm from 'node:vm';
 
 import { syntheticPng } from '../helpers/synthetic-image.mjs';
 
-// converter-core.js is a classic script inlined into the sealed frame. Evaluate
-// it in an empty context: that also proves it needs no browser APIs.
-const source = readFileSync(new URL('../../src/sealed/converter-core.js', import.meta.url), 'utf8');
-const Core = vm.runInNewContext(`${source}\nSealedCore`, Object.create(null));
+// image-core.js is Worker-only tool code (a classic script). Evaluate it in an
+// empty context: that also proves it needs no browser APIs.
+const source = readFileSync(new URL('../../src/tools/image-converter/image-core.js', import.meta.url), 'utf8');
+const Core = vm.runInNewContext(`${source}\nImageCore`, Object.create(null));
 // Objects from the vm context have that context's Object.prototype; compare as plain data.
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
@@ -33,27 +33,6 @@ test('default output avoids a no-op conversion', () => {
   assert.equal(Core.defaultOutputType('image/jpeg', all), 'image/webp');
   assert.equal(Core.defaultOutputType('image/jpeg', ['image/jpeg', 'image/png']), 'image/jpeg');
   assert.equal(Core.defaultOutputType('image/png', []), null);
-});
-
-test('fitSize keeps proportions and whole pixels', () => {
-  assert.deepEqual(plain(Core.fitSize({ sourceWidth: 4000, sourceHeight: 3000, width: 1000, keepAspect: true, changed: 'width' })), { width: 1000, height: 750 });
-  assert.deepEqual(plain(Core.fitSize({ sourceWidth: 4000, sourceHeight: 3000, height: 300, keepAspect: true, changed: 'height' })), { width: 400, height: 300 });
-  assert.deepEqual(plain(Core.fitSize({ sourceWidth: 400, sourceHeight: 300, width: 100, height: 100, keepAspect: false })), { width: 100, height: 100 });
-  assert.deepEqual(plain(Core.fitSize({ sourceWidth: 400, sourceHeight: 300, width: -5, height: NaN, keepAspect: false })), { width: 400, height: 300 });
-  assert.deepEqual(plain(Core.fitSize({ sourceWidth: 3, sourceHeight: 1000, width: 1, keepAspect: true, changed: 'width' })), { width: 1, height: 333 });
-});
-
-test('fitSize enforces dimension and pixel limits without distorting', () => {
-  const big = Core.fitSize({ sourceWidth: 40000, sourceHeight: 20000, width: 40000, height: 20000, keepAspect: false });
-  assert.ok(big.width <= Core.LIMITS.maxOutputDimension && big.height <= Core.LIMITS.maxOutputDimension);
-  assert.ok(big.width * big.height <= Core.LIMITS.maxOutputPixels * 1.001);
-  assert.ok(Math.abs(big.width / big.height - 2) < 0.01);
-});
-
-test('scaleSize presets', () => {
-  assert.deepEqual(plain(Core.scaleSize(640, 480, 50)), { width: 320, height: 240 });
-  assert.deepEqual(plain(Core.scaleSize(640, 480, 25)), { width: 160, height: 120 });
-  assert.deepEqual(plain(Core.scaleSize(640, 480, 100)), { width: 640, height: 480 });
 });
 
 test('downscaleSteps halves progressively and ends at the target', () => {

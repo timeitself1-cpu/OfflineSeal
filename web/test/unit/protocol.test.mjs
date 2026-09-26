@@ -30,7 +30,7 @@ test('accepts every well-formed message', () => {
     assert.deepEqual(validateFrameMessage(msg(base(type)), expected), { ok: true, type, code: null });
   }
   assert.equal(validateFrameMessage(msg(base('seal-failed', { code: 'csp-not-enforced' })), expected).ok, true);
-  assert.equal(validateFrameMessage(msg(base('processing-failed', { code: 'decode-failed' })), expected).ok, true);
+  assert.equal(validateFrameMessage(msg(base('processing-failed', { code: 'tool-failed' })), expected).ok, true);
 });
 
 test('rejects messages not from the active frame window', () => {
@@ -68,7 +68,7 @@ test('rejects extra fields on valid types (no smuggled url/endpoint/payload)', (
 test('rejects missing or unknown codes, and codes on types without codes', () => {
   assert.equal(validateFrameMessage(msg(base('processing-failed')), expected).ok, false);
   assert.equal(validateFrameMessage(msg(base('processing-failed', { code: 'https://x' })), expected).ok, false);
-  assert.equal(validateFrameMessage(msg(base('seal-failed', { code: 'decode-failed' })), expected).ok, false);
+  assert.equal(validateFrameMessage(msg(base('seal-failed', { code: 'tool-failed' })), expected).ok, false);
   assert.equal(validateFrameMessage(msg(base('frame-ready', { code: 'not-framed' })), expected).ok, false);
 });
 

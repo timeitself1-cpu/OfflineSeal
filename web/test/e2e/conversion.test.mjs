@@ -47,19 +47,19 @@ test('resize: presets, custom width with proportions, and free size', async () =
   await chooseImage(env, syntheticPng({ width: 800, height: 600 }));
   await waitForShellState(env.page, 'file-selected');
 
-  await env.frame.click('#scales button[data-scale="50"]');
+  await env.frame.click('[data-control="size"] button[data-scale="50"]');
   let out = await convertAndDownload(env, 'image/webp');
   assert.deepEqual(out.header, { type: 'image/webp', width: 400, height: 300 });
 
-  await env.frame.fill('#width', '200');
-  await env.frame.dispatchEvent('#width', 'change');
-  assert.equal(await env.frame.inputValue('#height'), '150', 'height follows width');
+  await env.frame.fill('[data-control="size"] input[data-dim="width"]', '200');
+  await env.frame.dispatchEvent('[data-control="size"] input[data-dim="width"]', 'change');
+  assert.equal(await env.frame.inputValue('[data-control="size"] input[data-dim="height"]'), '150', 'height follows width');
   out = await convertAndDownload(env, 'image/jpeg');
   assert.deepEqual(out.header, { type: 'image/jpeg', width: 200, height: 150 });
 
-  await env.frame.uncheck('#keep-aspect');
-  await env.frame.fill('#height', '50');
-  await env.frame.dispatchEvent('#height', 'change');
+  await env.frame.uncheck('[data-control="size"] input[data-lock]');
+  await env.frame.fill('[data-control="size"] input[data-dim="height"]', '50');
+  await env.frame.dispatchEvent('[data-control="size"] input[data-dim="height"]', 'change');
   out = await convertAndDownload(env, 'image/png');
   assert.deepEqual(out.header, { type: 'image/png', width: 200, height: 50 });
   await env.context.close();
@@ -69,7 +69,7 @@ test('transparent PNG → JPEG is flattened onto white', async () => {
   const env = await readyTool(browser, app);
   await chooseImage(env, syntheticPng({ width: 300, height: 90, alpha: true }));
   await waitForShellState(env.page, 'file-selected');
-  assert.equal(await env.frame.isVisible('#format-hint'), true, 'user is told about JPEG transparency');
+  assert.equal(await env.frame.isVisible('[data-control="jpeg-hint"]'), true, 'user is told about JPEG transparency');
   const out = await convertAndDownload(env, 'image/jpeg');
   const decoded = await decodeInCleanPage(env.context, out.bytes, [[10, 45], [250, 45]]);
   const [transparentArea, opaqueArea] = decoded.samples;

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{SEALED_CSP}}">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="x-dns-prefetch-control" content="off">
+<meta name="color-scheme" content="light dark">
+<meta name="offlineseal-instance" content="{{INSTANCE_PLACEHOLDER}}">
+<title>Private processing area</title>
+<style>{{RUNTIME_STYLE}}</style>
+</head>
+<body data-state="sealing">
+<main class="tool">
+  <section class="main" aria-label="Your files">
+    <div class="dropzone" id="dropzone">
+      <svg class="dz-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M14 6h14l10 10v24a2 2 0 0 1-2 2H14a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/><path d="M28 6v10h10"/><path d="M24 34V22m-5 5l5-5 5 5"/></svg>
+      <p class="dz-title" id="dz-title">Preparing…</p>
+      <p class="dz-sub" id="dz-sub">Checking the seal before any file can be added.</p>
+      <button type="button" class="primary" id="choose" disabled>Choose file</button>
+      <input type="file" id="file" disabled hidden>
+      <p class="message" id="dz-message" role="alert" hidden></p>
+    </div>
+    <div class="source" id="source" hidden>
+      <p class="source-head"><strong id="source-name"></strong><span id="source-meta"></span></p>
+      <figure class="preview" id="preview" hidden><div class="canvas-box" id="preview-box"></div></figure>
+      <div class="main-control" id="main-control" hidden></div>
+    </div>
+  </section>
+  <section class="settings" id="settings" aria-label="Settings" hidden>
+    <div class="controls" id="controls"></div>
+    <button type="button" class="primary wide" id="action" disabled>Run</button>
+    <p class="message" id="message" role="alert" hidden></p>
+    <div class="result" id="result" hidden>
+      <div class="result-head">
+        <div class="result-thumb" id="result-thumb"></div>
+        <div class="result-text" id="result-summary"></div>
+      </div>
+      <ol class="outputs" id="outputs"></ol>
+    </div>
+    <div class="fineprint" id="notes"></div>
+  </section>
+</main>
+<script type="application/json" id="offlineseal-manifest">{{TOOL_MANIFEST}}</script>
+<script type="text/plain" id="offlineseal-worker">{{TOOL_WORKER_BASE64}}</script>
+<script>{{RUNTIME_SCRIPT}}</script>
+</body>
+</html>
