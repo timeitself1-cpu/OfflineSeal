@@ -8,6 +8,7 @@
 // Page widths are unique per page (see test/unit/pdf-core.test.mjs), so every
 // test can tell exactly which page ended up where.
 
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
@@ -16,7 +17,7 @@ import { makePdf } from '../test/helpers/synthetic-pdf.mjs';
 
 const OUT = new URL('../test/fixtures/pdf/', import.meta.url);
 await mkdir(OUT, { recursive: true });
-const out = (name) => new URL(name, OUT).pathname;
+const out = (name) => fileURLToPath(new URL(name, OUT));
 const qpdf = (...args) => execFileSync('qpdf', args, { stdio: 'inherit' });
 
 // 1. Classic cross-reference table (pdf-lib default).
@@ -94,4 +95,4 @@ await writeFile(out('inherited-3.pdf'), inherited.bytes);
 // Broken cross-reference: startxref points into the middle of nowhere.
 await writeFile(out('broken-xref-3.pdf'), Buffer.from(inherited.bytes.toString('latin1').replace(/startxref\n\d+/, 'startxref\n999999'), 'latin1'));
 
-console.log('fixtures written to', OUT.pathname);
+console.log('fixtures written to', fileURLToPath(OUT));

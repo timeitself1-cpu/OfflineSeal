@@ -11,10 +11,10 @@
   "scripts": {
     "build": "node build.mjs",
     "serve": "node build.mjs && node server/serve.mjs",
-    "test": "node build.mjs && node --test --test-concurrency=4 'test/unit/*.test.mjs' 'test/e2e/*.test.mjs'",
-    "test:unit": "node build.mjs && node --test 'test/unit/*.test.mjs'",
-    "test:e2e": "node build.mjs && node --test --test-concurrency=4 'test/e2e/*.test.mjs'",
-    "test:edge": "node build.mjs && OFFLINESEAL_BROWSER=msedge node --test --test-concurrency=4 'test/e2e/*.test.mjs'",
+    "test": "node build.mjs && node --test --test-concurrency=4 \"test/unit/*.test.mjs\" \"test/e2e/*.test.mjs\"",
+    "test:unit": "node build.mjs && node --test \"test/unit/*.test.mjs\"",
+    "test:e2e": "node build.mjs && node --test --test-concurrency=4 \"test/e2e/*.test.mjs\"",
+    "test:edge": "node build.mjs && OFFLINESEAL_BROWSER=msedge node --test --test-concurrency=4 \"test/e2e/*.test.mjs\"",
     "evidence": "node scripts/capture-evidence.mjs"
   },
   "devDependencies": {

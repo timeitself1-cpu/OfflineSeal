@@ -7,6 +7,7 @@
 // from the browser itself (every request from every frame) and from the
 // server's own request log.
 
+import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import zlib from 'node:zlib';
 
@@ -74,7 +75,7 @@ const slowApp = await startApp({ delays: { '/assets/sealed/image-converter.seale
 // example to msedge), only the network evidence is captured, into its own file.
 const NETWORK_ONLY = BROWSER !== 'chromium';
 const shot = (page, name, options = {}) =>
-  NETWORK_ONLY ? Promise.resolve() : page.screenshot({ path: new URL(`${name}.png`, SHOTS).pathname, fullPage: true, ...options });
+  NETWORK_ONLY ? Promise.resolve() : page.screenshot({ path: fileURLToPath(new URL(`${name}.png`, SHOTS)), fullPage: true, ...options });
 
 // 1. Preparing (the tool download is held back so the state is visible).
 if (!NETWORK_ONLY) {
@@ -294,4 +295,4 @@ for (const [name, opts] of [['08-converted-1024', { width: 1024, height: 768 }],
 await browser.close();
 await app.close();
 await slowApp.close();
-console.log(`screenshots written to ${SHOTS.pathname}`);
+console.log(`screenshots written to ${fileURLToPath(SHOTS)}`);
